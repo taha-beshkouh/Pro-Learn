@@ -11,7 +11,7 @@ dependencies = [
     "Django>=5.2,<5.3",
     "djangorestframework>=3.17,<3.18",
     "psycopg[binary]>=3.2,<4",
-    "python-dotenv>=1.2,<2",
+    "python-dotenv==1.2.2",
 ]
 
 [project.optional-dependencies]
@@ -24,10 +24,11 @@ test = [
 include = ["config*", "apps*"]
 
 [tool.pytest.ini_options]
+markers = [
+    "postgresql: tests that require real PostgreSQL database behavior",
+]
 DJANGO_SETTINGS_MODULE = "config.settings"
 python_files = ["test_*.py"]
 testpaths = ["tests"]
 addopts = "--strict-markers --tb=short"
-markers = [
-    "postgresql: requires PostgreSQL transaction or constraint semantics",
-]
+
