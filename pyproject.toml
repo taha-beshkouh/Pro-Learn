@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pro-learn-backend"
+version = "0.1.0"
+description = "Pro Learn modular-monolith backend"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "Django>=5.2,<5.3",
+    "djangorestframework>=3.17,<3.18",
+    "psycopg[binary]>=3.2,<4",
+    "python-dotenv>=1.2,<2",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.3,<10",
+    "pytest-django>=4.10,<5",
+]
+
+[tool.setuptools.packages.find]
+include = ["config*", "apps*"]
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "config.settings"
+python_files = ["test_*.py"]
+testpaths = ["tests"]
+addopts = "--strict-markers --tb=short"
+markers = [
+    "postgresql: requires PostgreSQL transaction or constraint semantics",
+]

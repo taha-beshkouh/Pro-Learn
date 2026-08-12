@@ -1,0 +1,14 @@
+# Backend runtime
+Django==5.2.17
+djangorestframework==3.17.2
+psycopg[binary]==3.3.4
+python-dotenv==1.2.2
+
+# Testing
+pytest==9.1.1
+pytest-django==4.13.0
+
+# Existing project utilities
+numpy==2.4.4
+pypdf==6.14.2
+uv==0.11.24
