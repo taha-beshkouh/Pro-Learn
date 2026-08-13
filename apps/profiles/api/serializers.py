@@ -121,13 +121,6 @@ class GuestContextUpdateSerializer(StrictFieldsSerializer):
         allow_null=True,
         required=False,
     )
-    selected_stack_id = serializers.PrimaryKeyRelatedField(
-        source="selected_stack",
-        queryset=TechnologyStack.objects.all(),
-        allow_null=True,
-        required=False,
-    )
-    selected_project_id = serializers.UUIDField(allow_null=True, required=False)
     intended_action = serializers.RegexField(
         regex=r"^[a-z][a-z0-9_.:-]*$",
         max_length=64,

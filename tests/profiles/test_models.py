@@ -9,6 +9,7 @@ from apps.profiles.models import (
     ProfileLink,
     Role,
     RoleCode,
+    RoleTechnologyStack,
     TechnologyStack,
     UserProfile,
     UserSkill,
@@ -24,6 +25,13 @@ def test_known_roles_and_stacks_are_seeded():
         "django-drf",
         "aspnet-core-ef-core",
         "react-typescript-vite",
+    }
+    assert set(
+        RoleTechnologyStack.objects.values_list("role__code", "technology_stack__code")
+    ) == {
+        ("BACKEND_DEVELOPER", "django-drf"),
+        ("BACKEND_DEVELOPER", "aspnet-core-ef-core"),
+        ("FRONTEND_DEVELOPER", "react-typescript-vite"),
     }
 
 
@@ -76,6 +84,19 @@ def test_user_skill_is_unique_and_stack_is_protected(profile, django_stack):
 
     with pytest.raises(ProtectedError):
         django_stack.delete()
+
+
+def test_role_technology_stack_mapping_is_unique(backend_role, django_stack):
+    assert RoleTechnologyStack.objects.filter(
+        role=backend_role,
+        technology_stack=django_stack,
+    ).exists()
+
+    with pytest.raises(IntegrityError), transaction.atomic():
+        RoleTechnologyStack.objects.create(
+            role=backend_role,
+            technology_stack=django_stack,
+        )
 
 
 @pytest.mark.parametrize(

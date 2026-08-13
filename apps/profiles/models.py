@@ -110,6 +110,31 @@ class TechnologyStack(models.Model):
         return self.name
 
 
+class RoleTechnologyStack(models.Model):
+    """Normalized platform-level compatibility between roles and stacks."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    role = models.ForeignKey(
+        Role,
+        on_delete=models.CASCADE,
+        related_name="compatible_stack_links",
+    )
+    technology_stack = models.ForeignKey(
+        TechnologyStack,
+        on_delete=models.PROTECT,
+        related_name="compatible_role_links",
+    )
+
+    class Meta:
+        ordering = ["technology_stack__name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["role", "technology_stack"],
+                name="profiles_role_stack_unique",
+            )
+        ]
+
+
 class UserSkill(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     profile = models.ForeignKey(

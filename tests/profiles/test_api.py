@@ -197,17 +197,14 @@ def test_guest_context_requires_csrf_for_writes(csrf_client):
 
 
 def test_guest_context_round_trip_does_not_create_user(
-    csrf_client, django_user_model, backend_role, django_stack
+    csrf_client, django_user_model, backend_role
 ):
     csrf_token = fetch_csrf_token(csrf_client)
-    project_id = uuid.uuid4()
 
     response = csrf_client.patch(
         GUEST_CONTEXT_URL,
         {
             "selected_role_id": str(backend_role.id),
-            "selected_stack_id": str(django_stack.id),
-            "selected_project_id": str(project_id),
             "intended_action": "join_project",
             "return_path": "/projects?level=1",
         },
@@ -218,13 +215,34 @@ def test_guest_context_round_trip_does_not_create_user(
     assert response.status_code == 200
     assert response.data == {
         "selected_role_id": str(backend_role.id),
-        "selected_stack_id": str(django_stack.id),
-        "selected_project_id": str(project_id),
         "intended_action": "join_project",
         "return_path": "/projects?level=1",
     }
     assert csrf_client.get(GUEST_CONTEXT_URL).data == response.data
     assert django_user_model.objects.count() == 0
+
+
+def test_guest_context_cannot_bypass_project_stack_validation(
+    csrf_client, backend_role, django_stack
+):
+    csrf_token = fetch_csrf_token(csrf_client)
+
+    response = csrf_client.patch(
+        GUEST_CONTEXT_URL,
+        {
+            "selected_role_id": str(backend_role.id),
+            "selected_stack_id": str(django_stack.id),
+            "selected_project_id": str(uuid.uuid4()),
+        },
+        format="json",
+        HTTP_X_CSRFTOKEN=csrf_token,
+    )
+
+    assert response.status_code == 400
+    assert response.data == {
+        "selected_project_id": ["Unknown field."],
+        "selected_stack_id": ["Unknown field."],
+    }
 
 
 @pytest.mark.parametrize("return_path", ["https://evil.example", "//evil.example"])
