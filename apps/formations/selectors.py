@@ -19,6 +19,7 @@ def formation_list():
             "project_version",
             "project_version__project_template",
             "created_by",
+            "team__project_run",
         )
         .prefetch_related(
             Prefetch("ready_checks", queryset=_ready_checks_queryset())

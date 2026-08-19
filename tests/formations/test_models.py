@@ -4,7 +4,16 @@ import pytest
 from django.db import IntegrityError, connection, transaction
 from django.utils import timezone
 
-from apps.formations.models import ReadyCheck, ReadyCheckStatus, TeamFormation
+from apps.formations.models import (
+    ProjectRun,
+    ReadyCheck,
+    ReadyCheckStatus,
+    Team,
+    TeamFormation,
+    TeamMember,
+)
+from apps.formations.services import confirm_ready_check, create_team_formation
+from apps.projects.models import ProjectVersion
 
 
 pytestmark = [pytest.mark.django_db, pytest.mark.postgresql]
@@ -17,6 +26,17 @@ def set_formation_constraints_immediate():
             "formations_exact_current_slots_constraint, "
             "formations_ready_check_slots_constraint, "
             "formations_ready_check_validity_constraint IMMEDIATE"
+        )
+
+
+def set_completion_constraints_immediate():
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "SET CONSTRAINTS "
+            "formations_completion_formation_constraint, "
+            "formations_completion_team_constraint, "
+            "formations_completion_run_constraint, "
+            "formations_completion_member_constraint IMMEDIATE"
         )
 
 
@@ -176,3 +196,85 @@ def test_only_declined_or_expired_ready_check_can_become_historical(formation):
             cursor.execute(
                 "SET CONSTRAINTS formations_ready_check_validity_constraint IMMEDIATE"
             )
+
+
+def test_database_rejects_team_before_full_ready_check(formation):
+    with pytest.raises(IntegrityError), transaction.atomic():
+        Team.objects.create(formation=formation)
+        set_completion_constraints_immediate()
+
+
+def test_database_requires_exact_team_member_snapshots(formation, react_stack):
+    for ready_check in formation.ready_checks.order_by("role__code"):
+        confirm_ready_check(ready_check_id=ready_check.id, user=ready_check.user)
+    backend_member = TeamMember.objects.get(
+        project_run__team__formation=formation,
+        role__code="BACKEND_DEVELOPER",
+    )
+
+    with pytest.raises(IntegrityError), transaction.atomic():
+        backend_member.technology_stack = react_stack
+        backend_member.save(update_fields=["technology_stack"])
+        set_completion_constraints_immediate()
+
+
+def test_database_requires_exactly_three_team_members(formation):
+    for ready_check in formation.ready_checks.order_by("role__code"):
+        confirm_ready_check(ready_check_id=ready_check.id, user=ready_check.user)
+    member = TeamMember.objects.filter(
+        project_run__team__formation=formation
+    ).first()
+
+    with pytest.raises(IntegrityError), transaction.atomic():
+        member.delete()
+        set_completion_constraints_immediate()
+
+
+def test_database_keeps_project_run_on_formation_project_version(
+    formation,
+    helpdesk_version,
+):
+    for ready_check in formation.ready_checks.order_by("role__code"):
+        confirm_ready_check(ready_check_id=ready_check.id, user=ready_check.user)
+    project_run = ProjectRun.objects.get(team__formation=formation)
+    another_version = ProjectVersion.objects.create(
+        project_template=helpdesk_version.project_template,
+        version_number=helpdesk_version.version_number + 1,
+    )
+
+    with pytest.raises(IntegrityError), transaction.atomic():
+        project_run.project_version = another_version
+        project_run.save(update_fields=["project_version"])
+        set_completion_constraints_immediate()
+
+
+def test_database_enforces_one_active_project_run_per_user(
+    formation,
+    facilitator,
+    helpdesk_version,
+    proposed_members,
+):
+    for ready_check in formation.ready_checks.order_by("role__code"):
+        confirm_ready_check(ready_check_id=ready_check.id, user=ready_check.user)
+    active_member = TeamMember.objects.select_related("role").first()
+    second_formation = create_team_formation(
+        project_version=helpdesk_version,
+        created_by=facilitator,
+        members=proposed_members,
+    )
+
+    with pytest.raises(IntegrityError) as exc_info, transaction.atomic():
+        second_team = Team.objects.create(formation=second_formation)
+        second_run = ProjectRun.objects.create(
+            team=second_team,
+            project_version=helpdesk_version,
+            started_at=timezone.now(),
+        )
+        TeamMember.objects.create(
+            project_run=second_run,
+            user=active_member.user,
+            role=active_member.role,
+            technology_stack=active_member.technology_stack,
+        )
+
+    assert "formations_active_run_user_unique" in str(exc_info.value)

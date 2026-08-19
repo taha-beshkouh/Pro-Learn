@@ -6,17 +6,22 @@ from django.utils import timezone
 from apps.accounts.models import User
 from apps.formations.exceptions import (
     FormationAlreadyReady,
+    FormationCompletionConflict,
     InvalidFormationMembers,
     InvalidFormationStack,
+    MemberHasActiveProjectRun,
     ReadyCheckExpired,
     ReadyCheckNotPending,
     ReadyCheckNotReplaceable,
 )
 from apps.formations.models import (
     READY_CHECK_DURATION,
+    ProjectRun,
     ReadyCheck,
     ReadyCheckStatus,
+    Team,
     TeamFormation,
+    TeamMember,
 )
 from apps.profiles.models import Role, RoleCode, TechnologyStack, UserProfile
 from apps.projects.exceptions import (
@@ -151,6 +156,90 @@ def create_team_formation(
     return formation
 
 
+def _ensure_team_and_project_run_locked(
+    *,
+    formation: TeamFormation,
+    current_ready_checks: list[ReadyCheck],
+    started_at,
+) -> tuple[Team, ProjectRun]:
+    """Complete a locked, fully confirmed formation idempotently."""
+
+    if len(current_ready_checks) != 3 or any(
+        ready_check.status != ReadyCheckStatus.CONFIRMED
+        for ready_check in current_ready_checks
+    ):
+        raise FormationCompletionConflict
+
+    team, _ = Team.objects.get_or_create(
+        formation=formation,
+        defaults={"created_at": started_at},
+    )
+    project_run, _ = ProjectRun.objects.get_or_create(
+        team=team,
+        defaults={
+            "project_version_id": formation.project_version_id,
+            "started_at": started_at,
+        },
+    )
+    if (
+        project_run.project_version_id != formation.project_version_id
+        or project_run.started_at != started_at
+        or project_run.ended_at is not None
+    ):
+        raise FormationCompletionConflict
+
+    user_ids = [ready_check.user_id for ready_check in current_ready_checks]
+    locked_users = list(
+        User.objects.select_for_update()
+        .filter(id__in=user_ids)
+        .order_by("id")
+        .values_list("id", "is_active")
+    )
+    if len(locked_users) != 3 or any(not is_active for _, is_active in locked_users):
+        raise InvalidFormationMembers
+
+    if (
+        TeamMember.objects.filter(user_id__in=user_ids, ended_at__isnull=True)
+        .exclude(project_run=project_run)
+        .exists()
+    ):
+        raise MemberHasActiveProjectRun
+
+    expected_snapshots = {
+        ready_check.user_id: (
+            ready_check.role_id,
+            ready_check.technology_stack_id,
+        )
+        for ready_check in current_ready_checks
+    }
+    existing_members = list(
+        TeamMember.objects.select_for_update()
+        .filter(project_run=project_run)
+        .order_by("role_id", "id")
+    )
+    if existing_members:
+        existing_snapshots = {
+            member.user_id: (member.role_id, member.technology_stack_id)
+            for member in existing_members
+            if member.ended_at is None
+        }
+        if len(existing_members) != 3 or existing_snapshots != expected_snapshots:
+            raise FormationCompletionConflict
+    else:
+        TeamMember.objects.bulk_create(
+            [
+                TeamMember(
+                    project_run=project_run,
+                    user_id=ready_check.user_id,
+                    role_id=ready_check.role_id,
+                    technology_stack_id=ready_check.technology_stack_id,
+                )
+                for ready_check in current_ready_checks
+            ]
+        )
+    return team, project_run
+
+
 def _respond_to_ready_check(*, ready_check_id, user: User, confirm: bool, now=None):
     now = now or timezone.now()
     expired = False
@@ -186,14 +275,25 @@ def _respond_to_ready_check(*, ready_check_id, user: User, confirm: bool, now=No
             ready_check.responded_at = now
             ready_check.save(update_fields=["status", "responded_at"])
             if confirm:
-                confirmed_count = ReadyCheck.objects.filter(
-                    formation=formation,
-                    is_current=True,
-                    status=ReadyCheckStatus.CONFIRMED,
-                ).count()
-                if confirmed_count == 3 and formation.ready_confirmed_at is None:
-                    formation.ready_confirmed_at = now
-                    formation.save(update_fields=["ready_confirmed_at", "updated_at"])
+                current_ready_checks = list(
+                    ReadyCheck.objects.select_for_update()
+                    .filter(formation=formation, is_current=True)
+                    .order_by("role_id", "id")
+                )
+                if all(
+                    current.status == ReadyCheckStatus.CONFIRMED
+                    for current in current_ready_checks
+                ):
+                    if formation.ready_confirmed_at is None:
+                        formation.ready_confirmed_at = now
+                        formation.save(
+                            update_fields=["ready_confirmed_at", "updated_at"]
+                        )
+                    _ensure_team_and_project_run_locked(
+                        formation=formation,
+                        current_ready_checks=current_ready_checks,
+                        started_at=formation.ready_confirmed_at,
+                    )
     if expired:
         raise ReadyCheckExpired
     return ready_check

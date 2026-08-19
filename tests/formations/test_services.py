@@ -3,16 +3,25 @@ from datetime import timedelta
 from threading import Barrier
 
 import pytest
-from django.db import close_old_connections
+from django.db import close_old_connections, connection
 from django.utils import timezone
 
 from apps.formations.exceptions import (
     InvalidFormationMembers,
+    MemberHasActiveProjectRun,
     ReadyCheckExpired,
     ReadyCheckNotPending,
     ReadyCheckNotReplaceable,
 )
-from apps.formations.models import ReadyCheck, ReadyCheckStatus, TeamFormation
+from apps.formations.models import (
+    ProjectRun,
+    ReadyCheck,
+    ReadyCheckStatus,
+    Team,
+    TeamFormation,
+    TeamMember,
+)
+from apps.profiles.models import UserProfile, UserSkill
 from apps.formations.services import (
     ProposedMember,
     confirm_ready_check,
@@ -85,6 +94,201 @@ def test_each_member_can_confirm_and_third_confirmation_marks_formation_ready(
         is_current=True,
         status=ReadyCheckStatus.CONFIRMED,
     ).count() == 3
+    team = Team.objects.get(formation=formation)
+    project_run = ProjectRun.objects.get(team=team)
+    assert project_run.project_version_id == formation.project_version_id
+    assert project_run.started_at == formation.ready_confirmed_at
+    assert project_run.ended_at is None
+    assert project_run.members.count() == 3
+
+
+def test_team_and_project_run_are_created_exactly_once(formation):
+    checks = list(formation.ready_checks.order_by("role__code"))
+    for check in checks:
+        confirm_ready_check(ready_check_id=check.id, user=check.user)
+
+    with pytest.raises(ReadyCheckNotPending):
+        confirm_ready_check(ready_check_id=checks[-1].id, user=checks[-1].user)
+
+    assert Team.objects.filter(formation=formation).count() == 1
+    assert ProjectRun.objects.filter(team__formation=formation).count() == 1
+    assert TeamMember.objects.filter(
+        project_run__team__formation=formation
+    ).count() == 3
+
+
+def test_team_members_snapshot_role_and_selected_stack(
+    formation,
+    backend_user,
+    frontend_role,
+):
+    ready_check_snapshots = {
+        check.user_id: (check.role_id, check.technology_stack_id)
+        for check in formation.ready_checks.filter(is_current=True)
+    }
+
+    for check in formation.ready_checks.filter(is_current=True).order_by("role__code"):
+        confirm_ready_check(ready_check_id=check.id, user=check.user)
+
+    members = {
+        member.user_id: (member.role_id, member.technology_stack_id)
+        for member in TeamMember.objects.filter(
+            project_run__team__formation=formation
+        )
+    }
+    assert members == ready_check_snapshots
+    designer_ready_check = formation.ready_checks.get(
+        role__code="PRODUCT_DESIGNER",
+        is_current=True,
+    )
+    assert members[designer_ready_check.user_id][1] is None
+
+    backend_profile = UserProfile.objects.get(user=backend_user)
+    selected_stack_id = ready_check_snapshots[backend_user.id][1]
+    skill = UserSkill.objects.create(
+        profile=backend_profile,
+        technology_stack_id=selected_stack_id,
+    )
+    skill.delete()
+    UserProfile.objects.filter(user=backend_user).update(selected_role=frontend_role)
+    backend_membership = TeamMember.objects.get(user=backend_user)
+    assert backend_membership.role_id == ready_check_snapshots[backend_user.id][0]
+    assert backend_membership.technology_stack_id == ready_check_snapshots[
+        backend_user.id
+    ][1]
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.postgresql
+def test_changing_profile_role_after_confirmation_does_not_break_ready_check(
+    formation,
+    backend_user,
+    frontend_role,
+):
+    """Regression: deferred ReadyCheck triggers must not revalidate against the
+    user's mutable current UserProfile.selected_role. Historical snapshots are
+    immutable (PROJECT_RULES §2/§14)."""
+    for check in formation.ready_checks.filter(is_current=True).order_by("role__code"):
+        confirm_ready_check(ready_check_id=check.id, user=check.user)
+
+    ready_check_role_id = formation.ready_checks.get(
+        user=backend_user, is_current=True
+    ).role_id
+
+    # Mutate the user's current profile role after the ReadyCheck was already
+    # created and confirmed. The deferred ReadyCheck trigger must still accept
+    # the original snapshot role without raising.
+    UserProfile.objects.filter(user=backend_user).update(selected_role=frontend_role)
+
+    # Force any deferred constraint triggers to flush on the backend member's
+    # ReadyCheck row. If the trigger still depended on the mutable profile role
+    # this would raise 'Ready Check member and project role are incompatible.'
+    with connection.cursor() as cursor:
+        cursor.execute("SET CONSTRAINTS ALL IMMEDIATE")
+
+    ready_check = formation.ready_checks.get(user=backend_user, is_current=True)
+    assert ready_check.role_id == ready_check_role_id
+    assert ready_check.status == ReadyCheckStatus.CONFIRMED
+
+    backend_membership = TeamMember.objects.get(user=backend_user)
+    assert backend_membership.role_id == ready_check_role_id
+
+
+def test_create_formation_rejects_member_with_mismatched_profile_role(
+    facilitator,
+    helpdesk_version,
+    backend_role,
+    frontend_role,
+    designer_role,
+    django_stack,
+    frontend_user,
+    designer_user,
+    django_user_model,
+    password,
+):
+    """Service-layer validation must reject a proposed member whose current
+    UserProfile.selected_role does not match the proposed ReadyCheck role."""
+    # A user whose current profile role is FRONTEND_DEVELOPER ...
+    mismatched_user = django_user_model.objects.create_user(
+        email="mismatched@example.com",
+        password=password,
+    )
+    UserProfile.objects.create(user=mismatched_user, selected_role=frontend_role)
+
+    # ... proposed in the BACKEND_DEVELOPER slot must be rejected, while the
+    # other two members are valid for their slots.
+    members = [
+        ProposedMember(mismatched_user, backend_role, django_stack),
+        ProposedMember(frontend_user, frontend_role, None),
+        ProposedMember(designer_user, designer_role, None),
+    ]
+
+    with pytest.raises(InvalidFormationMembers):
+        create_team_formation(
+            project_version=helpdesk_version,
+            created_by=facilitator,
+            members=members,
+        )
+    assert TeamFormation.objects.count() == 0
+
+
+def test_replace_ready_check_rejects_mismatched_profile_role(
+    formation,
+    backend_user,
+    frontend_role,
+    frontend_user,
+    django_stack,
+    facilitator,
+):
+    """Replacing a ReadyCheck member with a user whose current profile role does
+    not match the slot role must be rejected at the service layer."""
+    backend = formation.ready_checks.get(
+        role__code="BACKEND_DEVELOPER", is_current=True
+    )
+    decline_ready_check(ready_check_id=backend.id, user=backend.user)
+
+    # frontend_user.selected_role is FRONTEND_DEVELOPER, not BACKEND_DEVELOPER.
+    with pytest.raises(InvalidFormationMembers):
+        replace_ready_check_member(
+            formation_id=formation.id,
+            ready_check_id=backend.id,
+            replacement_user=frontend_user,
+            technology_stack=django_stack,
+            proposed_by=facilitator,
+        )
+
+
+def test_one_active_project_run_per_user_is_enforced_before_completion(
+    formation,
+    facilitator,
+    helpdesk_version,
+    proposed_members,
+):
+    for check in formation.ready_checks.order_by("role__code"):
+        confirm_ready_check(ready_check_id=check.id, user=check.user)
+
+    second_formation = create_team_formation(
+        project_version=helpdesk_version,
+        created_by=facilitator,
+        members=proposed_members,
+    )
+    second_checks = list(second_formation.ready_checks.order_by("role__code"))
+    for check in second_checks[:2]:
+        confirm_ready_check(ready_check_id=check.id, user=check.user)
+
+    with pytest.raises(MemberHasActiveProjectRun):
+        confirm_ready_check(
+            ready_check_id=second_checks[2].id,
+            user=second_checks[2].user,
+        )
+
+    second_checks[2].refresh_from_db()
+    second_formation.refresh_from_db()
+    assert second_checks[2].status == ReadyCheckStatus.PENDING
+    assert second_formation.ready_confirmed_at is None
+    assert not Team.objects.filter(formation=second_formation).exists()
+    assert Team.objects.count() == 1
+    assert ProjectRun.objects.count() == 1
 
 
 def test_member_can_decline_only_pending_own_ready_check(formation):
@@ -231,6 +435,11 @@ def test_concurrent_confirmations_mark_formation_ready_once(formation):
     formation.refresh_from_db()
     assert formation.ready_confirmed_at is not None
     assert formation.ready_checks.filter(status=ReadyCheckStatus.CONFIRMED).count() == 3
+    assert Team.objects.filter(formation=formation).count() == 1
+    assert ProjectRun.objects.filter(team__formation=formation).count() == 1
+    assert TeamMember.objects.filter(
+        project_run__team__formation=formation
+    ).count() == 3
 
 
 @pytest.mark.django_db(transaction=True)
@@ -256,3 +465,54 @@ def test_same_ready_check_cannot_be_confirmed_twice_concurrently(formation):
         results = list(executor.map(lambda _: confirm(), range(2)))
 
     assert sorted(results) == ["confirmed", "rejected"]
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.postgresql
+def test_concurrent_formations_cannot_create_two_active_runs_for_the_same_users(
+    facilitator,
+    helpdesk_version,
+    proposed_members,
+):
+    formations = [
+        create_team_formation(
+            project_version=helpdesk_version,
+            created_by=facilitator,
+            members=proposed_members,
+        )
+        for _ in range(2)
+    ]
+    final_checks = []
+    for candidate in formations:
+        checks = list(candidate.ready_checks.order_by("role__code"))
+        for check in checks[:2]:
+            confirm_ready_check(ready_check_id=check.id, user=check.user)
+        final_checks.append(checks[2])
+
+    barrier = Barrier(2)
+
+    def confirm_final(check_id, user_id):
+        close_old_connections()
+        try:
+            barrier.wait(timeout=5)
+            check = ReadyCheck.objects.get(id=check_id, user_id=user_id)
+            try:
+                confirm_ready_check(ready_check_id=check.id, user=check.user)
+            except MemberHasActiveProjectRun:
+                return "active-run-rejected"
+            return "completed"
+        finally:
+            close_old_connections()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(
+            executor.map(
+                lambda args: confirm_final(*args),
+                [(check.id, check.user_id) for check in final_checks],
+            )
+        )
+
+    assert sorted(results) == ["active-run-rejected", "completed"]
+    assert Team.objects.count() == 1
+    assert ProjectRun.objects.count() == 1
+    assert TeamMember.objects.filter(ended_at__isnull=True).count() == 3

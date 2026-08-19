@@ -5,6 +5,7 @@ from rest_framework.permissions import IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.formations.api.exceptions import FormationCannotStart
 from apps.formations.api.serializers import (
     MyReadyCheckSerializer,
     ReadyCheckSerializer,
@@ -14,8 +15,10 @@ from apps.formations.api.serializers import (
 )
 from apps.formations.exceptions import (
     FormationAlreadyReady,
+    FormationCompletionConflict,
     InvalidFormationMembers,
     InvalidFormationStack,
+    MemberHasActiveProjectRun,
     ReadyCheckExpired,
     ReadyCheckNotPending,
     ReadyCheckNotReplaceable,
@@ -148,6 +151,16 @@ class ReadyCheckResponseView(APIView):
             raise ValidationError(
                 {"ready_check": ["This Ready Check is no longer pending."]}
             ) from exc
+        except MemberHasActiveProjectRun as exc:
+            raise ValidationError(
+                {
+                    "ready_check": [
+                        "A proposed member already has an active project run."
+                    ]
+                }
+            ) from exc
+        except (FormationCompletionConflict, InvalidFormationMembers) as exc:
+            raise FormationCannotStart() from exc
         return Response(
             MyReadyCheckSerializer(
                 ready_check_detail(ready_check_id=ready_check.id)

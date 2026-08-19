@@ -36,4 +36,3 @@ urlpatterns = [
         name="decline-ready-check",
     ),
 ]
-

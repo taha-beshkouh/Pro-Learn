@@ -86,6 +86,8 @@ class TeamFormationSerializer(serializers.ModelSerializer):
     )
     created_by = UserOutputSerializer(read_only=True)
     ready_checks = ReadyCheckSerializer(many=True, read_only=True)
+    team_id = serializers.SerializerMethodField()
+    project_run_id = serializers.SerializerMethodField()
 
     class Meta:
         model = TeamFormation
@@ -96,9 +98,20 @@ class TeamFormationSerializer(serializers.ModelSerializer):
             "created_by",
             "created_at",
             "ready_confirmed_at",
+            "team_id",
+            "project_run_id",
             "ready_checks",
         )
         read_only_fields = fields
+
+    def get_team_id(self, obj):
+        team = getattr(obj, "team", None)
+        return str(team.id) if team is not None else None
+
+    def get_project_run_id(self, obj):
+        team = getattr(obj, "team", None)
+        project_run = getattr(team, "project_run", None) if team is not None else None
+        return str(project_run.id) if project_run is not None else None
 
 
 class MyReadyCheckSerializer(ReadyCheckSerializer):
@@ -119,4 +132,3 @@ class MyReadyCheckSerializer(ReadyCheckSerializer):
             "project_name",
             *ReadyCheckSerializer.Meta.fields,
         )
-

@@ -116,7 +116,6 @@ DECLARE
     v_user_active boolean;
     v_proposer_authorized boolean;
     v_profile_id uuid;
-    v_profile_role_id uuid;
     v_role_id uuid;
     v_stack_id uuid;
     v_requires_stack boolean;
@@ -124,11 +123,15 @@ DECLARE
     v_requirement_id uuid;
     v_valid_stack boolean;
 BEGIN
+    -- Ready Check snapshots must be validated against the formation/project
+    -- definition, never against the member's mutable current UserProfile.
+    -- The selected_role / profile-role match is enforced at creation/replacement
+    -- time by the service layer, and the ReadyCheck.role is the historical
+    -- snapshot that must survive later profile changes (PROJECT_RULES §2/§14).
     SELECT ready_check.user_id,
            account.is_active,
            proposer.is_staff AND proposer.is_active,
            profile.id,
-           profile.selected_role_id,
            ready_check.role_id,
            ready_check.technology_stack_id,
            requirement.requires_stack,
@@ -138,7 +141,6 @@ BEGIN
            v_user_active,
            v_proposer_authorized,
            v_profile_id,
-           v_profile_role_id,
            v_role_id,
            v_stack_id,
            v_requires_stack,
@@ -164,8 +166,6 @@ BEGIN
 
     IF NOT v_user_active
        OR NOT v_proposer_authorized
-       OR v_profile_id IS NULL
-       OR v_profile_role_id IS DISTINCT FROM v_role_id
        OR v_requirement_id IS NULL
     THEN
         RAISE EXCEPTION 'Ready Check member and project role are incompatible.'

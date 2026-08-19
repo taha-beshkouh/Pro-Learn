@@ -89,7 +89,10 @@ Implemented:
 - historical Ready Check snapshots for replaced slots
 - concurrency-safe confirmation using transaction.atomic and select_for_update
 - ready_confirmed_at recorded exactly once after all three current members confirm
-- no Candidate Pool, Matching, Team, or ProjectRun implementation
+- Team + ProjectRun creation exactly once after all three current members confirm
+- TeamMember role and selected-stack historical snapshots
+- database-enforced one-active-ProjectRun membership per user
+- no Candidate Pool or Matching implementation
 
 Validation:
 - safe non-database checks completed
@@ -160,7 +163,8 @@ Verify them when relevant.
 
 ## Immediate Next Action
 
-Review the Phase 5 migration plan before applying changes.
+Review the Phase 5 migrations, including `0003_team_project_run.py`, before
+applying changes.
 
 Then:
 

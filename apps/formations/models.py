@@ -46,6 +46,101 @@ class TeamFormation(models.Model):
         ]
 
 
+class Team(models.Model):
+    """The durable team produced by one successfully confirmed formation."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    formation = models.OneToOneField(
+        TeamFormation,
+        on_delete=models.PROTECT,
+        related_name="team",
+    )
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    class Meta:
+        ordering = ["-created_at", "id"]
+
+
+class ProjectRun(models.Model):
+    """One team's execution of the exact ProjectVersion it confirmed."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    team = models.OneToOneField(
+        Team,
+        on_delete=models.PROTECT,
+        related_name="project_run",
+    )
+    project_version = models.ForeignKey(
+        ProjectVersion,
+        on_delete=models.PROTECT,
+        related_name="project_runs",
+    )
+    started_at = models.DateTimeField(editable=False)
+    ended_at = models.DateTimeField(null=True, blank=True, editable=False)
+
+    class Meta:
+        ordering = ["-started_at", "id"]
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(ended_at__isnull=True) | Q(ended_at__gte=F("started_at")),
+                name="formations_run_end_after_start",
+            )
+        ]
+        indexes = [
+            models.Index(
+                fields=["project_version", "ended_at", "started_at"],
+                name="formations_run_ver_active_idx",
+            )
+        ]
+
+
+class TeamMember(models.Model):
+    """Immutable participation snapshots for a started ProjectRun."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    project_run = models.ForeignKey(
+        ProjectRun,
+        on_delete=models.PROTECT,
+        related_name="members",
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="team_memberships",
+    )
+    role = models.ForeignKey(
+        Role,
+        on_delete=models.PROTECT,
+        related_name="historical_team_members",
+    )
+    technology_stack = models.ForeignKey(
+        TechnologyStack,
+        on_delete=models.PROTECT,
+        related_name="historical_team_members",
+        null=True,
+        blank=True,
+    )
+    ended_at = models.DateTimeField(null=True, blank=True, editable=False)
+
+    class Meta:
+        ordering = ["role__name", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["project_run", "user"],
+                name="formations_run_member_user_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["project_run", "role"],
+                name="formations_run_member_role_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["user"],
+                condition=Q(ended_at__isnull=True),
+                name="formations_active_run_user_unique",
+            ),
+        ]
+
+
 class ReadyCheck(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     formation = models.ForeignKey(
@@ -133,4 +228,3 @@ class ReadyCheck(models.Model):
         if self.status == ReadyCheckStatus.PENDING and at >= self.expires_at:
             return ReadyCheckStatus.EXPIRED
         return self.status
-

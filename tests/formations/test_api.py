@@ -1,6 +1,7 @@
 import pytest
 
 from apps.formations.models import ReadyCheckStatus
+from apps.formations.services import confirm_ready_check, create_team_formation
 
 
 pytestmark = pytest.mark.django_db
@@ -88,6 +89,56 @@ def test_member_can_decline_own_ready_check(api_client, formation, designer_user
 
     assert response.status_code == 200
     assert response.data["status"] == ReadyCheckStatus.DECLINED
+
+
+def test_third_confirmation_exposes_created_team_and_project_run_to_staff(
+    api_client,
+    formation,
+    facilitator,
+):
+    for ready_check in formation.ready_checks.order_by("role__code"):
+        api_client.force_login(ready_check.user)
+        response = api_client.post(
+            f"/api/v1/ready-checks/{ready_check.id}/confirm/"
+        )
+        assert response.status_code == 200
+
+    api_client.force_login(facilitator)
+    response = api_client.get(f"/api/v1/team-formations/{formation.id}/")
+
+    assert response.status_code == 200
+    assert response.data["team_id"] is not None
+    assert response.data["project_run_id"] is not None
+
+
+def test_active_project_run_conflict_returns_safe_response(
+    api_client,
+    formation,
+    facilitator,
+    helpdesk_version,
+    proposed_members,
+):
+    for ready_check in formation.ready_checks.order_by("role__code"):
+        confirm_ready_check(ready_check_id=ready_check.id, user=ready_check.user)
+    second_formation = create_team_formation(
+        project_version=helpdesk_version,
+        created_by=facilitator,
+        members=proposed_members,
+    )
+    second_checks = list(second_formation.ready_checks.order_by("role__code"))
+    for ready_check in second_checks[:2]:
+        confirm_ready_check(ready_check_id=ready_check.id, user=ready_check.user)
+
+    api_client.force_login(second_checks[2].user)
+    response = api_client.post(
+        f"/api/v1/ready-checks/{second_checks[2].id}/confirm/"
+    )
+
+    assert response.status_code == 400
+    assert response.data == {
+        "ready_check": ["A proposed member already has an active project run."]
+    }
+    assert "constraint" not in str(response.data).lower()
 
 
 def test_only_staff_can_replace_and_replacement_keeps_role(

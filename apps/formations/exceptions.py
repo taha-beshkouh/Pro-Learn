@@ -25,3 +25,10 @@ class ReadyCheckNotReplaceable(FormationDomainError):
 class FormationAlreadyReady(FormationDomainError):
     pass
 
+
+class MemberHasActiveProjectRun(FormationDomainError):
+    pass
+
+
+class FormationCompletionConflict(FormationDomainError):
+    pass

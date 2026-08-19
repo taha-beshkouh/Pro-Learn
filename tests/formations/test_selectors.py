@@ -8,6 +8,7 @@ from apps.formations.selectors import (
     current_ready_checks_for_user,
     formation_detail,
 )
+from apps.formations.services import confirm_ready_check
 
 
 pytestmark = pytest.mark.django_db
@@ -33,3 +34,18 @@ def test_member_ready_check_serialization_uses_one_query(
         ).data
 
     assert len(data) == 1
+
+
+def test_completed_formation_serialization_stays_at_two_queries(
+    django_assert_num_queries,
+    formation,
+):
+    for ready_check in formation.ready_checks.order_by("role__code"):
+        confirm_ready_check(ready_check_id=ready_check.id, user=ready_check.user)
+
+    with django_assert_num_queries(2):
+        selected = formation_detail(formation_id=formation.id)
+        data = TeamFormationSerializer(selected).data
+
+    assert data["team_id"] is not None
+    assert data["project_run_id"] is not None
