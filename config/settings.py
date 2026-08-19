@@ -53,6 +53,7 @@ INSTALLED_APPS = [
     "apps.accounts.apps.AccountsConfig",
     "apps.profiles.apps.ProfilesConfig",
     "apps.projects.apps.ProjectsConfig",
+    "apps.formations.apps.FormationsConfig",
 ]
 
 MIDDLEWARE = [

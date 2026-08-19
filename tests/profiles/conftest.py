@@ -36,13 +36,31 @@ def other_profile(other_user):
 
 
 @pytest.fixture
-def backend_role():
-    return Role.objects.get(code=RoleCode.BACKEND_DEVELOPER)
+def mvp_roles():
+    role_definitions = (
+        (RoleCode.BACKEND_DEVELOPER, "Backend Developer"),
+        (RoleCode.FRONTEND_DEVELOPER, "Frontend Developer"),
+        (RoleCode.PRODUCT_DESIGNER, "Product Designer"),
+    )
+    return {
+        code: Role.objects.get_or_create(code=code, defaults={"name": name})[0]
+        for code, name in role_definitions
+    }
 
 
 @pytest.fixture
-def frontend_role():
-    return Role.objects.get(code=RoleCode.FRONTEND_DEVELOPER)
+def backend_role(mvp_roles):
+    return mvp_roles[RoleCode.BACKEND_DEVELOPER]
+
+
+@pytest.fixture
+def frontend_role(mvp_roles):
+    return mvp_roles[RoleCode.FRONTEND_DEVELOPER]
+
+
+@pytest.fixture
+def product_designer_role(mvp_roles):
+    return mvp_roles[RoleCode.PRODUCT_DESIGNER]
 
 
 @pytest.fixture
