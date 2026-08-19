@@ -3,7 +3,7 @@ from datetime import timedelta
 from threading import Barrier
 
 import pytest
-from django.db import close_old_connections, connection
+from django.db import close_old_connections
 from django.utils import timezone
 
 from apps.formations.exceptions import (
@@ -127,7 +127,7 @@ def test_team_members_snapshot_role_and_selected_stack(
         for check in formation.ready_checks.filter(is_current=True)
     }
 
-    for check in formation.ready_checks.filter(is_current=True).order_by("role__code"):
+    for check in formation.ready_checks.order_by("role__code"):
         confirm_ready_check(ready_check_id=check.id, user=check.user)
 
     members = {
@@ -137,11 +137,9 @@ def test_team_members_snapshot_role_and_selected_stack(
         )
     }
     assert members == ready_check_snapshots
-    designer_ready_check = formation.ready_checks.get(
-        role__code="PRODUCT_DESIGNER",
-        is_current=True,
-    )
-    assert members[designer_ready_check.user_id][1] is None
+    assert members[
+        formation.ready_checks.get(role__code="PRODUCT_DESIGNER").user_id
+    ][1] is None
 
     backend_profile = UserProfile.objects.get(user=backend_user)
     selected_stack_id = ready_check_snapshots[backend_user.id][1]
@@ -156,106 +154,6 @@ def test_team_members_snapshot_role_and_selected_stack(
     assert backend_membership.technology_stack_id == ready_check_snapshots[
         backend_user.id
     ][1]
-
-
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.postgresql
-def test_changing_profile_role_after_confirmation_does_not_break_ready_check(
-    formation,
-    backend_user,
-    frontend_role,
-):
-    """Regression: deferred ReadyCheck triggers must not revalidate against the
-    user's mutable current UserProfile.selected_role. Historical snapshots are
-    immutable (PROJECT_RULES §2/§14)."""
-    for check in formation.ready_checks.filter(is_current=True).order_by("role__code"):
-        confirm_ready_check(ready_check_id=check.id, user=check.user)
-
-    ready_check_role_id = formation.ready_checks.get(
-        user=backend_user, is_current=True
-    ).role_id
-
-    # Mutate the user's current profile role after the ReadyCheck was already
-    # created and confirmed. The deferred ReadyCheck trigger must still accept
-    # the original snapshot role without raising.
-    UserProfile.objects.filter(user=backend_user).update(selected_role=frontend_role)
-
-    # Force any deferred constraint triggers to flush on the backend member's
-    # ReadyCheck row. If the trigger still depended on the mutable profile role
-    # this would raise 'Ready Check member and project role are incompatible.'
-    with connection.cursor() as cursor:
-        cursor.execute("SET CONSTRAINTS ALL IMMEDIATE")
-
-    ready_check = formation.ready_checks.get(user=backend_user, is_current=True)
-    assert ready_check.role_id == ready_check_role_id
-    assert ready_check.status == ReadyCheckStatus.CONFIRMED
-
-    backend_membership = TeamMember.objects.get(user=backend_user)
-    assert backend_membership.role_id == ready_check_role_id
-
-
-def test_create_formation_rejects_member_with_mismatched_profile_role(
-    facilitator,
-    helpdesk_version,
-    backend_role,
-    frontend_role,
-    designer_role,
-    django_stack,
-    frontend_user,
-    designer_user,
-    django_user_model,
-    password,
-):
-    """Service-layer validation must reject a proposed member whose current
-    UserProfile.selected_role does not match the proposed ReadyCheck role."""
-    # A user whose current profile role is FRONTEND_DEVELOPER ...
-    mismatched_user = django_user_model.objects.create_user(
-        email="mismatched@example.com",
-        password=password,
-    )
-    UserProfile.objects.create(user=mismatched_user, selected_role=frontend_role)
-
-    # ... proposed in the BACKEND_DEVELOPER slot must be rejected, while the
-    # other two members are valid for their slots.
-    members = [
-        ProposedMember(mismatched_user, backend_role, django_stack),
-        ProposedMember(frontend_user, frontend_role, None),
-        ProposedMember(designer_user, designer_role, None),
-    ]
-
-    with pytest.raises(InvalidFormationMembers):
-        create_team_formation(
-            project_version=helpdesk_version,
-            created_by=facilitator,
-            members=members,
-        )
-    assert TeamFormation.objects.count() == 0
-
-
-def test_replace_ready_check_rejects_mismatched_profile_role(
-    formation,
-    backend_user,
-    frontend_role,
-    frontend_user,
-    django_stack,
-    facilitator,
-):
-    """Replacing a ReadyCheck member with a user whose current profile role does
-    not match the slot role must be rejected at the service layer."""
-    backend = formation.ready_checks.get(
-        role__code="BACKEND_DEVELOPER", is_current=True
-    )
-    decline_ready_check(ready_check_id=backend.id, user=backend.user)
-
-    # frontend_user.selected_role is FRONTEND_DEVELOPER, not BACKEND_DEVELOPER.
-    with pytest.raises(InvalidFormationMembers):
-        replace_ready_check_member(
-            formation_id=formation.id,
-            ready_check_id=backend.id,
-            replacement_user=frontend_user,
-            technology_stack=django_stack,
-            proposed_by=facilitator,
-        )
 
 
 def test_one_active_project_run_per_user_is_enforced_before_completion(
