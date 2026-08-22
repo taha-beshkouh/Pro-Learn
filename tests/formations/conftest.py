@@ -5,7 +5,12 @@ from django.db import transaction
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from apps.formations.services import ProposedMember, create_team_formation
+from apps.formations.models import ProjectRun
+from apps.formations.services import (
+    ProposedMember,
+    confirm_ready_check,
+    create_team_formation,
+)
 from apps.profiles.models import (
     Role,
     RoleCode,
@@ -17,9 +22,11 @@ from apps.projects.models import (
     Level,
     ProjectRoleAllowedStack,
     ProjectRoleRequirement,
+    ProjectTaskTemplate,
     ProjectTemplate,
     ProjectVersion,
     StackPolicy,
+    SprintTemplate,
 )
 
 
@@ -252,3 +259,110 @@ def formation(facilitator, helpdesk_version, proposed_members):
         members=proposed_members,
         now=timezone.now() - timedelta(hours=1),
     )
+
+
+@pytest.fixture
+def runtime_sprint_templates(helpdesk_version):
+    return [
+        SprintTemplate.objects.create(
+            project_version=helpdesk_version,
+            sequence=sequence,
+            title=f"Sprint {sequence}",
+            brief=f"Brief {sequence}",
+            planned_start_offset_days=(sequence - 1) * 7,
+            planned_duration_days=5,
+        )
+        for sequence in range(1, 4)
+    ]
+
+
+@pytest.fixture
+def runtime_project_run(
+    facilitator,
+    helpdesk_version,
+    proposed_members,
+    runtime_sprint_templates,
+):
+    formation = create_team_formation(
+        project_version=helpdesk_version,
+        created_by=facilitator,
+        members=proposed_members,
+    )
+    for ready_check in formation.ready_checks.order_by("role__code"):
+        confirm_ready_check(ready_check_id=ready_check.id, user=ready_check.user)
+    return ProjectRun.objects.get(team__formation=formation)
+
+
+@pytest.fixture
+def runtime_members(runtime_project_run):
+    return {
+        member.role.code: member
+        for member in runtime_project_run.members.select_related("role", "user")
+    }
+
+
+@pytest.fixture
+def outside_user(django_user_model, password):
+    return django_user_model.objects.create_user(
+        email="outside@example.com",
+        password=password,
+    )
+
+
+@pytest.fixture
+def runtime_work_items(
+    helpdesk_version,
+    runtime_sprint_templates,
+    backend_role,
+    frontend_role,
+    designer_role,
+    django_stack,
+    react_stack,
+    formation_catalog,
+):
+    aspnet_stack = formation_catalog["stacks"]["aspnet-core-ef-core"]
+    first_sprint = runtime_sprint_templates[0]
+    return [
+        ProjectTaskTemplate.objects.create(
+            project_version=helpdesk_version,
+            sprint_template=first_sprint,
+            title="Shared Sprint work",
+            position=100,
+        ),
+        ProjectTaskTemplate.objects.create(
+            project_version=helpdesk_version,
+            sprint_template=first_sprint,
+            role=backend_role,
+            technology_stack=django_stack,
+            title="Django backend work",
+            position=101,
+        ),
+        ProjectTaskTemplate.objects.create(
+            project_version=helpdesk_version,
+            sprint_template=first_sprint,
+            role=backend_role,
+            technology_stack=aspnet_stack,
+            title="ASP.NET backend work",
+            position=102,
+        ),
+        ProjectTaskTemplate.objects.create(
+            project_version=helpdesk_version,
+            sprint_template=first_sprint,
+            role=frontend_role,
+            technology_stack=react_stack,
+            title="Frontend work",
+            position=103,
+        ),
+        ProjectTaskTemplate.objects.create(
+            project_version=helpdesk_version,
+            sprint_template=first_sprint,
+            role=designer_role,
+            title="Designer work",
+            position=104,
+        ),
+        ProjectTaskTemplate.objects.create(
+            project_version=helpdesk_version,
+            title="Shared project resource",
+            position=105,
+        ),
+    ]

@@ -32,3 +32,19 @@ class MemberHasActiveProjectRun(FormationDomainError):
 
 class FormationCompletionConflict(FormationDomainError):
     pass
+
+
+class SprintRuntimeConfigurationError(FormationDomainError):
+    pass
+
+
+class SprintTransitionNotAllowed(FormationDomainError):
+    pass
+
+
+class SprintAccessDenied(FormationDomainError):
+    pass
+
+
+class SprintSubmissionNotAllowed(FormationDomainError):
+    pass

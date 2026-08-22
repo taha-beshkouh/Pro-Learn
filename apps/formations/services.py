@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import timedelta
 
 from django.db import transaction
 from django.utils import timezone
@@ -13,12 +14,19 @@ from apps.formations.exceptions import (
     ReadyCheckExpired,
     ReadyCheckNotPending,
     ReadyCheckNotReplaceable,
+    SprintAccessDenied,
+    SprintRuntimeConfigurationError,
+    SprintSubmissionNotAllowed,
+    SprintTransitionNotAllowed,
 )
 from apps.formations.models import (
     READY_CHECK_DURATION,
     ProjectRun,
     ReadyCheck,
     ReadyCheckStatus,
+    SprintRun,
+    SprintRunState,
+    SprintSubmission,
     Team,
     TeamFormation,
     TeamMember,
@@ -33,6 +41,17 @@ from apps.projects.services import resolve_project_stack_selection
 
 
 EXPECTED_ROLE_CODES = frozenset(RoleCode.values)
+
+ALLOWED_SPRINT_TRANSITIONS = {
+    SprintRunState.LOCKED: frozenset({SprintRunState.ACTIVE}),
+    SprintRunState.ACTIVE: frozenset({SprintRunState.SUBMITTED}),
+    SprintRunState.SUBMITTED: frozenset({SprintRunState.UNDER_REVIEW}),
+    SprintRunState.UNDER_REVIEW: frozenset(
+        {SprintRunState.CHANGES_REQUESTED, SprintRunState.COMPLETED}
+    ),
+    SprintRunState.CHANGES_REQUESTED: frozenset({SprintRunState.SUBMITTED}),
+    SprintRunState.COMPLETED: frozenset(),
+}
 
 
 @dataclass(frozen=True)
@@ -158,6 +177,97 @@ def create_team_formation(
     return formation
 
 
+def validate_sprint_transition(*, current_state: str, target_state: str) -> None:
+    if target_state not in ALLOWED_SPRINT_TRANSITIONS.get(current_state, frozenset()):
+        raise SprintTransitionNotAllowed
+
+
+def sprint_next_action(
+    *,
+    state: str | None,
+    is_designated_submitter: bool,
+    has_sprints: bool = True,
+) -> str:
+    if state is None:
+        return "SPRINTS_COMPLETED" if has_sprints else "NO_SPRINT_AVAILABLE"
+    if state == SprintRunState.LOCKED:
+        return "WAIT_FOR_FACILITATOR"
+    if state == SprintRunState.ACTIVE:
+        return "SUBMIT_SPRINT" if is_designated_submitter else "COLLABORATE"
+    if state in {SprintRunState.SUBMITTED, SprintRunState.UNDER_REVIEW}:
+        return "WAIT_FOR_REVIEW"
+    if state == SprintRunState.CHANGES_REQUESTED:
+        return "RESUBMIT_SPRINT" if is_designated_submitter else "ADDRESS_CHANGES"
+    return "SPRINTS_COMPLETED"
+
+
+def _sprint_schedule(*, project_run: ProjectRun, sprint_template):
+    planned_start_at = project_run.started_at + timedelta(
+        days=sprint_template.planned_start_offset_days
+    )
+    planned_end_at = planned_start_at + timedelta(
+        days=sprint_template.planned_duration_days
+    )
+    return planned_start_at, planned_end_at
+
+
+def _ensure_sprint_runs_locked(*, project_run: ProjectRun) -> list[SprintRun]:
+    sprint_templates = list(
+        project_run.project_version.sprint_templates.order_by("sequence", "id")
+    )
+    existing = list(
+        SprintRun.objects.select_for_update(of=("self",))
+        .filter(project_run=project_run)
+        .order_by("sprint_template__sequence", "id")
+    )
+    if existing:
+        expected = {
+            sprint_template.id: _sprint_schedule(
+                project_run=project_run,
+                sprint_template=sprint_template,
+            )
+            for sprint_template in sprint_templates
+        }
+        actual = {
+            sprint_run.sprint_template_id: (
+                sprint_run.planned_start_at,
+                sprint_run.planned_end_at,
+            )
+            for sprint_run in existing
+        }
+        if actual != expected:
+            raise SprintRuntimeConfigurationError
+        return existing
+
+    return SprintRun.objects.bulk_create(
+        [
+            SprintRun(
+                project_run=project_run,
+                sprint_template=sprint_template,
+                planned_start_at=planned_start_at,
+                planned_end_at=planned_end_at,
+            )
+            for sprint_template in sprint_templates
+            for planned_start_at, planned_end_at in (
+                _sprint_schedule(
+                    project_run=project_run,
+                    sprint_template=sprint_template,
+                ),
+            )
+        ]
+    )
+
+
+@transaction.atomic
+def initialize_sprint_runs(*, project_run: ProjectRun) -> list[SprintRun]:
+    project_run = (
+        ProjectRun.objects.select_for_update(of=("self",))
+        .select_related("project_version")
+        .get(id=project_run.id)
+    )
+    return _ensure_sprint_runs_locked(project_run=project_run)
+
+
 def _ensure_team_and_project_run_locked(
     *,
     formation: TeamFormation,
@@ -239,6 +349,7 @@ def _ensure_team_and_project_run_locked(
                 for ready_check in current_ready_checks
             ]
         )
+    _ensure_sprint_runs_locked(project_run=project_run)
     return team, project_run
 
 
@@ -381,4 +492,158 @@ def replace_ready_check_member(
         proposed_by=proposed_by,
         started_at=now,
         expires_at=now + READY_CHECK_DURATION,
+    )
+
+
+def _locked_sprint_run(*, sprint_run_id, project_run_id=None):
+    sprint_ref = SprintRun.objects.only("project_run_id").get(id=sprint_run_id)
+    if project_run_id is not None and sprint_ref.project_run_id != project_run_id:
+        raise SprintRun.DoesNotExist
+    # Lock parent then child; nullable response relations must stay outside this query.
+    project_run = ProjectRun.objects.select_for_update(of=("self",)).get(
+        id=sprint_ref.project_run_id
+    )
+    sprint_run = (
+        SprintRun.objects.select_for_update(of=("self",))
+        .select_related("sprint_template")
+        .get(id=sprint_run_id, project_run=project_run)
+    )
+    if project_run.ended_at is not None:
+        raise SprintTransitionNotAllowed
+    return project_run, sprint_run
+
+
+def _require_active_staff(*, actor: User) -> None:
+    if not actor.is_active or not actor.is_staff:
+        raise SprintAccessDenied
+
+
+@transaction.atomic
+def open_sprint(
+    *,
+    sprint_run_id,
+    designated_submitter_id,
+    actor: User,
+    project_run_id=None,
+    now=None,
+) -> SprintRun:
+    _require_active_staff(actor=actor)
+    now = now or timezone.now()
+    project_run, sprint_run = _locked_sprint_run(
+        sprint_run_id=sprint_run_id,
+        project_run_id=project_run_id,
+    )
+    validate_sprint_transition(
+        current_state=sprint_run.state,
+        target_state=SprintRunState.ACTIVE,
+    )
+    if SprintRun.objects.filter(
+        project_run=project_run,
+        sprint_template__sequence__lt=sprint_run.sprint_template.sequence,
+    ).exclude(state=SprintRunState.COMPLETED).exists():
+        raise SprintTransitionNotAllowed
+    try:
+        designated_submitter = TeamMember.objects.select_for_update(of=("self",)).get(
+            id=designated_submitter_id,
+            project_run=project_run,
+            ended_at__isnull=True,
+        )
+    except TeamMember.DoesNotExist as exc:
+        raise SprintSubmissionNotAllowed from exc
+    sprint_run.state = SprintRunState.ACTIVE
+    sprint_run.designated_submitter = designated_submitter
+    sprint_run.opened_at = now
+    sprint_run.save(
+        update_fields=["state", "designated_submitter", "opened_at", "updated_at"]
+    )
+    return sprint_run
+
+
+@transaction.atomic
+def submit_sprint(
+    *,
+    sprint_run_id,
+    user: User,
+    evidence: str = "",
+    project_run_id=None,
+    now=None,
+) -> tuple[SprintRun, SprintSubmission]:
+    now = now or timezone.now()
+    project_run, sprint_run = _locked_sprint_run(
+        sprint_run_id=sprint_run_id,
+        project_run_id=project_run_id,
+    )
+    try:
+        member = TeamMember.objects.select_for_update(of=("self",)).get(
+            project_run=project_run,
+            user=user,
+            ended_at__isnull=True,
+        )
+    except TeamMember.DoesNotExist as exc:
+        raise SprintAccessDenied from exc
+    if sprint_run.designated_submitter_id != member.id:
+        raise SprintSubmissionNotAllowed
+    validate_sprint_transition(
+        current_state=sprint_run.state,
+        target_state=SprintRunState.SUBMITTED,
+    )
+    submission = SprintSubmission.objects.create(
+        sprint_run=sprint_run,
+        submitted_by=member,
+        evidence=evidence,
+        submitted_at=now,
+    )
+    sprint_run.state = SprintRunState.SUBMITTED
+    sprint_run.save(update_fields=["state", "updated_at"])
+    return sprint_run, submission
+
+
+def _staff_transition_sprint(
+    *,
+    sprint_run_id,
+    target_state: str,
+    actor: User,
+    project_run_id=None,
+    now=None,
+) -> SprintRun:
+    _require_active_staff(actor=actor)
+    now = now or timezone.now()
+    _, sprint_run = _locked_sprint_run(
+        sprint_run_id=sprint_run_id,
+        project_run_id=project_run_id,
+    )
+    validate_sprint_transition(
+        current_state=sprint_run.state,
+        target_state=target_state,
+    )
+    sprint_run.state = target_state
+    update_fields = ["state", "updated_at"]
+    if target_state == SprintRunState.COMPLETED:
+        sprint_run.completed_at = now
+        update_fields.append("completed_at")
+    sprint_run.save(update_fields=update_fields)
+    return sprint_run
+
+
+@transaction.atomic
+def mark_sprint_under_review(**kwargs) -> SprintRun:
+    return _staff_transition_sprint(
+        target_state=SprintRunState.UNDER_REVIEW,
+        **kwargs,
+    )
+
+
+@transaction.atomic
+def request_sprint_changes(**kwargs) -> SprintRun:
+    return _staff_transition_sprint(
+        target_state=SprintRunState.CHANGES_REQUESTED,
+        **kwargs,
+    )
+
+
+@transaction.atomic
+def complete_sprint(**kwargs) -> SprintRun:
+    return _staff_transition_sprint(
+        target_state=SprintRunState.COMPLETED,
+        **kwargs,
     )

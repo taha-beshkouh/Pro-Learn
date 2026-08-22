@@ -1,15 +1,22 @@
 from django.core.exceptions import ObjectDoesNotExist
 from rest_framework import status
-from rest_framework.exceptions import NotFound, ValidationError
+from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 from rest_framework.permissions import IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.formations.api.exceptions import FormationCannotStart
+from apps.formations.api.exceptions import FormationCannotStart, SprintConflict
 from apps.formations.api.serializers import (
+    EmptyActionInputSerializer,
     MyReadyCheckSerializer,
+    OpenSprintInputSerializer,
+    ProjectRunDashboardSerializer,
+    ProjectRunWorkspaceSerializer,
     ReadyCheckSerializer,
     ReplacementInputSerializer,
+    SprintRunDetailSerializer,
+    SprintRunSerializer,
+    SprintSubmissionInputSerializer,
     TeamFormationInputSerializer,
     TeamFormationSerializer,
 )
@@ -22,9 +29,15 @@ from apps.formations.exceptions import (
     ReadyCheckExpired,
     ReadyCheckNotPending,
     ReadyCheckNotReplaceable,
+    SprintAccessDenied,
+    SprintRuntimeConfigurationError,
+    SprintSubmissionNotAllowed,
+    SprintTransitionNotAllowed,
 )
-from apps.formations.models import ReadyCheck, TeamFormation
+from apps.formations.models import ProjectRun, ReadyCheck, SprintRun, TeamFormation
 from apps.formations.selectors import (
+    active_project_run_for_user,
+    active_sprint_run_for_user,
     current_ready_checks_for_user,
     formation_detail,
     formation_list,
@@ -35,7 +48,12 @@ from apps.formations.services import (
     confirm_ready_check,
     create_team_formation,
     decline_ready_check,
+    complete_sprint,
+    mark_sprint_under_review,
+    open_sprint,
     replace_ready_check_member,
+    request_sprint_changes,
+    submit_sprint,
 )
 from apps.projects.exceptions import ProjectConfigurationError
 from apps.projects.api.exceptions import ProjectConfigurationUnavailable
@@ -174,3 +192,144 @@ class ConfirmReadyCheckView(ReadyCheckResponseView):
 
 class DeclineReadyCheckView(ReadyCheckResponseView):
     action = "decline"
+
+
+class CurrentProjectRunMixin:
+    def get_project_run(self, request):
+        try:
+            return active_project_run_for_user(user=request.user)
+        except ProjectRun.DoesNotExist as exc:
+            raise NotFound("Active project run not found.") from exc
+
+
+class CurrentProjectRunDashboardView(CurrentProjectRunMixin, APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        return Response(ProjectRunDashboardSerializer(self.get_project_run(request)).data)
+
+
+class CurrentProjectRunWorkspaceView(CurrentProjectRunMixin, APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        return Response(ProjectRunWorkspaceSerializer(self.get_project_run(request)).data)
+
+
+class CurrentProjectRunSprintListView(CurrentProjectRunMixin, APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        project_run = self.get_project_run(request)
+        return Response(SprintRunSerializer(project_run.sprint_runs.all(), many=True).data)
+
+
+class CurrentProjectRunSprintDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, sprint_run_id):
+        try:
+            sprint_run = active_sprint_run_for_user(
+                user=request.user,
+                sprint_run_id=sprint_run_id,
+            )
+        except (ProjectRun.DoesNotExist, SprintRun.DoesNotExist) as exc:
+            raise NotFound("Sprint not found.") from exc
+        return Response(SprintRunDetailSerializer(sprint_run).data)
+
+
+def _empty_action_data(request):
+    serializer = EmptyActionInputSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+
+
+def _sprint_transition_error(exc):
+    if isinstance(exc, (SprintTransitionNotAllowed, SprintRuntimeConfigurationError)):
+        return SprintConflict()
+    if isinstance(exc, SprintSubmissionNotAllowed):
+        return PermissionDenied("Only the designated team member may submit this Sprint.")
+    if isinstance(exc, SprintAccessDenied):
+        return NotFound("Sprint not found.")
+    return None
+
+
+class OpenSprintView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def post(self, request, project_run_id, sprint_run_id):
+        serializer = OpenSprintInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            sprint_run = open_sprint(
+                project_run_id=project_run_id,
+                sprint_run_id=sprint_run_id,
+                designated_submitter_id=serializer.validated_data[
+                    "designated_submitter"
+                ].id,
+                actor=request.user,
+            )
+        except (ProjectRun.DoesNotExist, SprintRun.DoesNotExist) as exc:
+            raise NotFound("Sprint not found.") from exc
+        except (
+            SprintAccessDenied,
+            SprintSubmissionNotAllowed,
+            SprintTransitionNotAllowed,
+            SprintRuntimeConfigurationError,
+        ) as exc:
+            raise _sprint_transition_error(exc) from exc
+        return Response(SprintRunSerializer(sprint_run).data)
+
+
+class SubmitSprintView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, project_run_id, sprint_run_id):
+        serializer = SprintSubmissionInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            sprint_run, _ = submit_sprint(
+                project_run_id=project_run_id,
+                sprint_run_id=sprint_run_id,
+                user=request.user,
+                evidence=serializer.validated_data["evidence"],
+            )
+        except (ProjectRun.DoesNotExist, SprintRun.DoesNotExist) as exc:
+            raise NotFound("Sprint not found.") from exc
+        except (
+            SprintAccessDenied,
+            SprintSubmissionNotAllowed,
+            SprintTransitionNotAllowed,
+        ) as exc:
+            raise _sprint_transition_error(exc) from exc
+        return Response(SprintRunSerializer(sprint_run).data)
+
+
+class StaffSprintTransitionView(APIView):
+    permission_classes = [IsAdminUser]
+    service = None
+
+    def post(self, request, project_run_id, sprint_run_id):
+        _empty_action_data(request)
+        try:
+            sprint_run = self.service(
+                project_run_id=project_run_id,
+                sprint_run_id=sprint_run_id,
+                actor=request.user,
+            )
+        except (ProjectRun.DoesNotExist, SprintRun.DoesNotExist) as exc:
+            raise NotFound("Sprint not found.") from exc
+        except (SprintAccessDenied, SprintTransitionNotAllowed) as exc:
+            raise _sprint_transition_error(exc) from exc
+        return Response(SprintRunSerializer(sprint_run).data)
+
+
+class MarkSprintUnderReviewView(StaffSprintTransitionView):
+    service = staticmethod(mark_sprint_under_review)
+
+
+class RequestSprintChangesView(StaffSprintTransitionView):
+    service = staticmethod(request_sprint_changes)
+
+
+class CompleteSprintView(StaffSprintTransitionView):
+    service = staticmethod(complete_sprint)

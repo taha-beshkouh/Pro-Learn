@@ -76,7 +76,7 @@ Validation:
 ---
 
 Phase 5 — Team Formation / Ready Check
-Status: `IMPLEMENTATION COMPLETE - MANUAL POSTGRESQL VALIDATION PENDING`
+Status: `VALIDATED`
 
 Implemented:
 - staff-created TeamFormation for one published ProjectVersion
@@ -95,8 +95,39 @@ Implemented:
 - no Candidate Pool or Matching implementation
 
 Validation:
-- safe non-database checks completed
-- PostgreSQL migrations and database-backed tests require manual developer execution
+- migrations applied successfully
+- PostgreSQL validation completed
+- focused formations tests passed
+- full test suite passed
+
+---
+
+Phase 6 — ProjectRun Workspace Read APIs + Minimal Sprint Runtime
+Status: `IMPLEMENTATION COMPLETE - MANUAL POSTGRESQL VALIDATION PENDING`
+
+Implemented:
+- current-member dashboard and workspace read APIs
+- current-member Sprint list and detail APIs
+- historical TeamMember role and selected-stack snapshots in workspace responses
+- role/selected-stack-scoped static work content
+- SprintRun schedule snapshots initialized from SprintTemplate definitions
+- exact six-state Sprint transition workflow
+- Facilitator/Admin-only opening and review transitions
+- one designated current TeamMember submission rule
+- append-only SprintSubmission evidence history
+- transaction.atomic and select_for_update transition services
+- sequential Sprint opening and fixed planned deadline enforcement
+- PostgreSQL constraints/triggers for runtime identity, schedule, sequencing, transitions, submitter compatibility, and append-only history
+- no runtime task lifecycle or other deferred feature implementation
+
+Validation:
+- safe syntax/import compilation passed
+- Django system check passed
+- migration/model state comparison passed with no pending model changes
+- 13 pure Sprint domain tests passed
+- 83 formation tests collected successfully
+- PostgreSQL migration application and database-dependent tests are pending developer validation
+
 ## Current Environment
 
 Development environment:
@@ -163,28 +194,7 @@ Verify them when relevant.
 
 ## Immediate Next Action
 
-Review the Phase 5 migrations, including `0003_team_project_run.py` and
-`0004_preserve_ready_check_history.py`, before applying changes.
-
-Then:
-
-```powershell
-.\.venv\Scripts\python.exe manage.py migrate
-```
-
-Run the focused Phase 5 PostgreSQL-dependent tests supplied by Codex.
-
-Finally run the full suite:
-
-```powershell
-.\.venv\Scripts\python.exe -m pytest -q -p no:cacheprovider
-```
-
-After validation:
-
-```powershell
-Remove-Item Env:LOAD_LOCAL_ENV -ErrorAction SilentlyContinue
-```
+Apply the Phase 6 migration and run the focused formations suite against PostgreSQL.
 
 ## Validation Status Rules
 
@@ -196,34 +206,3 @@ Use these meanings consistently:
 - `IN PROGRESS` — implementation has started but the phase is not complete.
 
 Never mark a PostgreSQL-dependent phase as validated based only on Codex's non-database checks.
-
-## Current Known Blockers
-
-- No implementation blocker is currently known.
-- Phase 5 manual PostgreSQL migration and test validation is the current gate.
-
-## Handoff Rule
-
-For a new ChatGPT/Codex conversation:
-
-1. Provide `PROJECT_RULES.md`.
-2. Provide this `CURRENT_STATE.md`.
-3. Tell the agent to treat:
-   - `PROJECT_RULES.md` as the source of truth for accepted product, architecture, scope, and execution rules.
-   - `CURRENT_STATE.md` as the source of truth for current implementation and validation status.
-4. Do not assume anything marked pending is complete.
-5. Continue from **Immediate Next Action**.
-6. Do not silently change accepted rules. Any proposed change must be explicitly presented as a proposal with rationale and trade-offs.
-
-## Update Policy
-
-Update this file after meaningful state transitions, especially:
-- a phase is implemented
-- migrations are manually applied
-- PostgreSQL-dependent tests are manually verified
-- the final full suite passes
-- a phase becomes validated
-- the next phase starts
-- a real blocker appears or is resolved
-
-Do not add long-term product rules here. Put those in `PROJECT_RULES.md`.

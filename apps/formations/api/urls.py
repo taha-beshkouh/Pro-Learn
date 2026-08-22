@@ -1,10 +1,19 @@
 from django.urls import path
 
 from apps.formations.api.views import (
+    CompleteSprintView,
     ConfirmReadyCheckView,
+    CurrentProjectRunDashboardView,
+    CurrentProjectRunSprintDetailView,
+    CurrentProjectRunSprintListView,
+    CurrentProjectRunWorkspaceView,
     DeclineReadyCheckView,
+    MarkSprintUnderReviewView,
     MyReadyCheckListView,
     ReplaceReadyCheckView,
+    RequestSprintChangesView,
+    OpenSprintView,
+    SubmitSprintView,
     TeamFormationDetailView,
     TeamFormationListCreateView,
 )
@@ -34,5 +43,50 @@ urlpatterns = [
         "ready-checks/<uuid:ready_check_id>/decline/",
         DeclineReadyCheckView.as_view(),
         name="decline-ready-check",
+    ),
+    path(
+        "project-runs/me/dashboard/",
+        CurrentProjectRunDashboardView.as_view(),
+        name="current-project-run-dashboard",
+    ),
+    path(
+        "project-runs/me/workspace/",
+        CurrentProjectRunWorkspaceView.as_view(),
+        name="current-project-run-workspace",
+    ),
+    path(
+        "project-runs/me/sprints/",
+        CurrentProjectRunSprintListView.as_view(),
+        name="current-project-run-sprints",
+    ),
+    path(
+        "project-runs/me/sprints/<uuid:sprint_run_id>/",
+        CurrentProjectRunSprintDetailView.as_view(),
+        name="current-project-run-sprint-detail",
+    ),
+    path(
+        "project-runs/<uuid:project_run_id>/sprints/<uuid:sprint_run_id>/open/",
+        OpenSprintView.as_view(),
+        name="open-sprint",
+    ),
+    path(
+        "project-runs/<uuid:project_run_id>/sprints/<uuid:sprint_run_id>/submit/",
+        SubmitSprintView.as_view(),
+        name="submit-sprint",
+    ),
+    path(
+        "project-runs/<uuid:project_run_id>/sprints/<uuid:sprint_run_id>/under-review/",
+        MarkSprintUnderReviewView.as_view(),
+        name="mark-sprint-under-review",
+    ),
+    path(
+        "project-runs/<uuid:project_run_id>/sprints/<uuid:sprint_run_id>/request-changes/",
+        RequestSprintChangesView.as_view(),
+        name="request-sprint-changes",
+    ),
+    path(
+        "project-runs/<uuid:project_run_id>/sprints/<uuid:sprint_run_id>/complete/",
+        CompleteSprintView.as_view(),
+        name="complete-sprint",
     ),
 ]
