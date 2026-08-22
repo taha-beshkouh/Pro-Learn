@@ -116,7 +116,7 @@ def create_team_formation(
     now=None,
 ) -> TeamFormation:
     now = now or timezone.now()
-    if not created_by.is_active or not created_by.is_staff or not project_version.is_published:
+    if not created_by.is_active or not created_by.is_staff:
         raise InvalidFormationMembers
     validate_member_roles(role_codes=(member.role.code for member in members))
     if len({member.user.id for member in members}) != 3:
@@ -130,6 +130,8 @@ def create_team_formation(
         )
         .get(id=project_version.id)
     )
+    if not project_version.is_published:
+        raise InvalidFormationMembers
     validated_members = [
         (member, _validated_stack_for_member(project_version=project_version, member=member))
         for member in members

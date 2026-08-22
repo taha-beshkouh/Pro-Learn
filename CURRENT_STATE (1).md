@@ -163,8 +163,8 @@ Verify them when relevant.
 
 ## Immediate Next Action
 
-Review the Phase 5 migrations, including `0003_team_project_run.py`, before
-applying changes.
+Review the Phase 5 migrations, including `0003_team_project_run.py` and
+`0004_preserve_ready_check_history.py`, before applying changes.
 
 Then:
 

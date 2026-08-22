@@ -12,7 +12,12 @@ from apps.formations.models import (
     TeamFormation,
     TeamMember,
 )
-from apps.formations.services import confirm_ready_check, create_team_formation
+from apps.formations.services import (
+    confirm_ready_check,
+    create_team_formation,
+    decline_ready_check,
+    replace_ready_check_member,
+)
 from apps.projects.models import ProjectVersion
 
 
@@ -195,6 +200,35 @@ def test_only_declined_or_expired_ready_check_can_become_historical(formation):
         with connection.cursor() as cursor:
             cursor.execute(
                 "SET CONSTRAINTS formations_ready_check_validity_constraint IMMEDIATE"
+            )
+
+
+def test_database_preserves_historical_ready_check_snapshots(
+    formation,
+    replacement_backend_user,
+    django_stack,
+    facilitator,
+):
+    historical = formation.ready_checks.get(
+        role__code="BACKEND_DEVELOPER",
+        is_current=True,
+    )
+    decline_ready_check(ready_check_id=historical.id, user=historical.user)
+    replace_ready_check_member(
+        formation_id=formation.id,
+        ready_check_id=historical.id,
+        replacement_user=replacement_backend_user,
+        technology_stack=django_stack,
+        proposed_by=facilitator,
+    )
+
+    historical.refresh_from_db()
+    assert historical.is_current is False
+    with pytest.raises(IntegrityError), transaction.atomic():
+        historical.delete()
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SET CONSTRAINTS formations_ready_check_history_constraint IMMEDIATE"
             )
 
 

@@ -81,6 +81,27 @@ def test_create_formation_rejects_duplicate_users(
     assert TeamFormation.objects.count() == 0
 
 
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.postgresql
+def test_create_formation_rechecks_locked_project_version_publication(
+    facilitator,
+    helpdesk_version,
+    proposed_members,
+):
+    type(helpdesk_version).objects.filter(id=helpdesk_version.id).update(
+        published_at=None
+    )
+
+    with pytest.raises(InvalidFormationMembers):
+        create_team_formation(
+            project_version=helpdesk_version,
+            created_by=facilitator,
+            members=proposed_members,
+        )
+
+    assert TeamFormation.objects.count() == 0
+
+
 def test_each_member_can_confirm_and_third_confirmation_marks_formation_ready(
     formation,
 ):
@@ -117,6 +138,8 @@ def test_team_and_project_run_are_created_exactly_once(formation):
     ).count() == 3
 
 
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.postgresql
 def test_team_members_snapshot_role_and_selected_stack(
     formation,
     backend_user,
@@ -149,7 +172,9 @@ def test_team_members_snapshot_role_and_selected_stack(
     )
     skill.delete()
     UserProfile.objects.filter(user=backend_user).update(selected_role=frontend_role)
+    backend_ready_check = formation.ready_checks.get(user=backend_user, is_current=True)
     backend_membership = TeamMember.objects.get(user=backend_user)
+    assert backend_ready_check.role_id == ready_check_snapshots[backend_user.id][0]
     assert backend_membership.role_id == ready_check_snapshots[backend_user.id][0]
     assert backend_membership.technology_stack_id == ready_check_snapshots[
         backend_user.id
