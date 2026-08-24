@@ -5,12 +5,17 @@ from rest_framework.permissions import IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.formations.api.exceptions import FormationCannotStart, SprintConflict
+from apps.formations.api.exceptions import (
+    FormationCannotStart,
+    ProjectRunConflict,
+    SprintConflict,
+)
 from apps.formations.api.serializers import (
     EmptyActionInputSerializer,
     MyReadyCheckSerializer,
     OpenSprintInputSerializer,
     ProjectRunDashboardSerializer,
+    ProjectRunLifecycleSerializer,
     ProjectRunWorkspaceSerializer,
     ReadyCheckSerializer,
     ReplacementInputSerializer,
@@ -26,10 +31,13 @@ from apps.formations.exceptions import (
     InvalidFormationMembers,
     InvalidFormationStack,
     MemberHasActiveProjectRun,
+    ProjectRunDeadlineNotReached,
+    ProjectRunTransitionNotAllowed,
     ReadyCheckExpired,
     ReadyCheckNotPending,
     ReadyCheckNotReplaceable,
     SprintAccessDenied,
+    SprintDeadlinePassed,
     SprintRuntimeConfigurationError,
     SprintSubmissionNotAllowed,
     SprintTransitionNotAllowed,
@@ -50,6 +58,7 @@ from apps.formations.services import (
     decline_ready_check,
     complete_sprint,
     mark_sprint_under_review,
+    mark_project_run_incomplete,
     open_sprint,
     replace_ready_check_member,
     request_sprint_changes,
@@ -177,7 +186,11 @@ class ReadyCheckResponseView(APIView):
                     ]
                 }
             ) from exc
-        except (FormationCompletionConflict, InvalidFormationMembers) as exc:
+        except (
+            FormationCompletionConflict,
+            InvalidFormationMembers,
+            SprintRuntimeConfigurationError,
+        ) as exc:
             raise FormationCannotStart() from exc
         return Response(
             MyReadyCheckSerializer(
@@ -244,10 +257,19 @@ def _empty_action_data(request):
 
 
 def _sprint_transition_error(exc):
-    if isinstance(exc, (SprintTransitionNotAllowed, SprintRuntimeConfigurationError)):
+    if isinstance(
+        exc,
+        (
+            ProjectRunTransitionNotAllowed,
+            SprintTransitionNotAllowed,
+            SprintRuntimeConfigurationError,
+        ),
+    ):
         return SprintConflict()
     if isinstance(exc, SprintSubmissionNotAllowed):
         return PermissionDenied("Only the designated team member may submit this Sprint.")
+    if isinstance(exc, SprintDeadlinePassed):
+        return SprintConflict("The ProjectRun deadline has passed.")
     if isinstance(exc, SprintAccessDenied):
         return NotFound("Sprint not found.")
     return None
@@ -297,6 +319,7 @@ class SubmitSprintView(APIView):
             raise NotFound("Sprint not found.") from exc
         except (
             SprintAccessDenied,
+            SprintDeadlinePassed,
             SprintSubmissionNotAllowed,
             SprintTransitionNotAllowed,
         ) as exc:
@@ -318,9 +341,35 @@ class StaffSprintTransitionView(APIView):
             )
         except (ProjectRun.DoesNotExist, SprintRun.DoesNotExist) as exc:
             raise NotFound("Sprint not found.") from exc
-        except (SprintAccessDenied, SprintTransitionNotAllowed) as exc:
+        except (
+            ProjectRunTransitionNotAllowed,
+            SprintAccessDenied,
+            SprintRuntimeConfigurationError,
+            SprintTransitionNotAllowed,
+        ) as exc:
             raise _sprint_transition_error(exc) from exc
         return Response(SprintRunSerializer(sprint_run).data)
+
+
+class MarkProjectRunIncompleteView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def post(self, request, project_run_id):
+        _empty_action_data(request)
+        try:
+            project_run = mark_project_run_incomplete(
+                project_run_id=project_run_id,
+                actor=request.user,
+            )
+        except ProjectRun.DoesNotExist as exc:
+            raise NotFound("Project run not found.") from exc
+        except ProjectRunDeadlineNotReached as exc:
+            raise ProjectRunConflict(
+                "An active ProjectRun can be marked incomplete only at or after its deadline."
+            ) from exc
+        except ProjectRunTransitionNotAllowed as exc:
+            raise ProjectRunConflict() from exc
+        return Response(ProjectRunLifecycleSerializer(project_run).data)
 
 
 class MarkSprintUnderReviewView(StaffSprintTransitionView):

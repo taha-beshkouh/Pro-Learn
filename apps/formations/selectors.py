@@ -3,6 +3,7 @@ from django.db.models import Prefetch
 from apps.accounts.models import User
 from apps.formations.models import (
     ProjectRun,
+    ProjectRunState,
     ReadyCheck,
     SprintRun,
     SprintSubmission,
@@ -116,6 +117,7 @@ def _project_runs_queryset():
 
 def active_project_run_for_user(*, user: User) -> ProjectRun:
     project_run = _project_runs_queryset().get(
+        state=ProjectRunState.ACTIVE,
         ended_at__isnull=True,
         members__user=user,
         members__ended_at__isnull=True,

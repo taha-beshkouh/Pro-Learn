@@ -1,6 +1,6 @@
 import pytest
 
-from apps.formations.models import SprintRunState
+from apps.formations.models import ProjectRunState, SprintRunState
 from apps.formations.services import confirm_ready_check
 
 
@@ -40,7 +40,8 @@ def test_dashboard_summarizes_members_active_run_and_next_action(
     assert response.data["current_sprint"]["id"] == str(first.id)
     assert response.data["current_sprint"]["state"] == SprintRunState.LOCKED
     assert response.data["next_action"] == "WAIT_FOR_FACILITATOR"
-    assert response.data["deadline"] is not None
+    assert response.data["state"] == ProjectRunState.ACTIVE
+    assert response.data["deadline"] == response.data["deadline_at"]
 
 
 def test_dashboard_does_not_report_unconfigured_sprints_as_completed(
@@ -256,3 +257,75 @@ def test_invalid_api_transition_returns_conflict(
     )
 
     assert response.status_code == 409
+
+
+def test_overdue_submission_is_conflict_and_client_time_cannot_bypass_cutoff(
+    api_client,
+    overdue_runtime_project_run,
+    overdue_runtime_members,
+    facilitator,
+):
+    backend = overdue_runtime_members["BACKEND_DEVELOPER"]
+    first = _ordered_sprints(overdue_runtime_project_run)[0]
+    api_client.force_login(facilitator)
+    opened = api_client.post(
+        _action_url(overdue_runtime_project_run, first, "open"),
+        {"designated_submitter_id": str(backend.id)},
+        format="json",
+    )
+    assert opened.status_code == 200
+
+    api_client.force_login(backend.user)
+    rejected = api_client.post(
+        _action_url(overdue_runtime_project_run, first, "submit"),
+        {"evidence": "Late evidence"},
+        format="json",
+    )
+    spoofed = api_client.post(
+        _action_url(overdue_runtime_project_run, first, "submit"),
+        {
+            "evidence": "Backdated evidence",
+            "submitted_at": overdue_runtime_project_run.started_at.isoformat(),
+        },
+        format="json",
+    )
+
+    assert rejected.status_code == 409
+    assert spoofed.status_code == 400
+    assert first.submissions.count() == 0
+
+
+def test_manual_incomplete_api_is_staff_only_and_deadline_gated(
+    api_client,
+    runtime_project_run,
+    runtime_members,
+    facilitator,
+):
+    backend = runtime_members["BACKEND_DEVELOPER"]
+    url = f"/api/v1/project-runs/{runtime_project_run.id}/incomplete/"
+    api_client.force_login(backend.user)
+    assert api_client.post(url, {}, format="json").status_code == 403
+
+    api_client.force_login(facilitator)
+    response = api_client.post(url, {}, format="json")
+
+    assert response.status_code == 409
+    runtime_project_run.refresh_from_db()
+    assert runtime_project_run.state == ProjectRunState.ACTIVE
+
+
+def test_staff_marks_overdue_project_run_incomplete(
+    api_client,
+    overdue_runtime_project_run,
+    facilitator,
+):
+    api_client.force_login(facilitator)
+    response = api_client.post(
+        f"/api/v1/project-runs/{overdue_runtime_project_run.id}/incomplete/",
+        {},
+        format="json",
+    )
+
+    assert response.status_code == 200
+    assert response.data["state"] == ProjectRunState.INCOMPLETE
+    assert response.data["ended_at"] is not None

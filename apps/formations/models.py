@@ -29,6 +29,12 @@ class SprintRunState(models.TextChoices):
     COMPLETED = "COMPLETED", "Completed"
 
 
+class ProjectRunState(models.TextChoices):
+    ACTIVE = "ACTIVE", "Active"
+    COMPLETED = "COMPLETED", "Completed"
+    INCOMPLETE = "INCOMPLETE", "Incomplete"
+
+
 class TeamFormation(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     project_version = models.ForeignKey(
@@ -84,12 +90,39 @@ class ProjectRun(models.Model):
         on_delete=models.PROTECT,
         related_name="project_runs",
     )
+    state = models.CharField(
+        max_length=10,
+        choices=ProjectRunState.choices,
+        default=ProjectRunState.ACTIVE,
+    )
     started_at = models.DateTimeField(editable=False)
+    deadline_at = models.DateTimeField(editable=False)
     ended_at = models.DateTimeField(null=True, blank=True, editable=False)
 
     class Meta:
         ordering = ["-started_at", "id"]
         constraints = [
+            models.CheckConstraint(
+                condition=Q(state__in=ProjectRunState.values),
+                name="formations_run_state_known",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(state=ProjectRunState.ACTIVE, ended_at__isnull=True)
+                    | Q(
+                        state__in=(
+                            ProjectRunState.COMPLETED,
+                            ProjectRunState.INCOMPLETE,
+                        ),
+                        ended_at__isnull=False,
+                    )
+                ),
+                name="formations_run_state_end_coherent",
+            ),
+            models.CheckConstraint(
+                condition=Q(deadline_at__gt=F("started_at")),
+                name="formations_run_deadline_after_start",
+            ),
             models.CheckConstraint(
                 condition=Q(ended_at__isnull=True) | Q(ended_at__gte=F("started_at")),
                 name="formations_run_end_after_start",

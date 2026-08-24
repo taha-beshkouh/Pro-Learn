@@ -298,6 +298,11 @@ Rules:
 - Replacement preserves the same role.
 - When all three confirm, Team + ProjectRun are created exactly once.
 - ProjectRun begins only after the full Ready Check succeeds.
+- The successful full Ready Check is the authoritative start point for ProjectRun time. At that moment, the backend records the server-side start timestamp for the ProjectRun and derives its absolute deadline from the fixed ProjectVersion's configured project duration.
+- Client/device time is never authoritative for ProjectRun deadline enforcement. The backend owns the deadline; clients may only display it in the user's timezone.
+- Before confirmation, proposed members must be shown the project duration, Sprint cadence, expected weekly effort, and that Sprint review is manual in the MVP.
+- Members must be told that Facilitator review may take several hours; the current MVP operational expectation is around 8 hours, but this is not a guaranteed SLA and does not add time to a Sprint or ProjectRun.
+- Members are responsible for submitting early enough to leave practical time for review and possible fixes before the relevant deadline.
 
 ## 14. Team
 
@@ -313,8 +318,37 @@ Changing Profile/UserSkill later must not rewrite TeamMember history.
 - Represents one team's execution of one fixed ProjectVersion.
 - Starts only after successful Ready Check.
 - Each member must satisfy the one-active-ProjectRun rule.
-- Full ProjectRun state machine is not finalized; do not invent extra product states.
-- If the project cannot be completed in allowed time, Facilitator may eventually grant more time or mark it incomplete.
+
+MVP ProjectRun states:
+- `ACTIVE`
+- `COMPLETED`
+- `INCOMPLETE`
+
+Rules:
+- A ProjectRun is created as `ACTIVE` only after the full Ready Check succeeds.
+- The backend records the ProjectRun's server-side `started_at` at successful full Ready Check and stores an absolute `deadline_at` derived from `started_at + the fixed ProjectVersion's configured project duration`.
+- `deadline_at` is the authoritative timestamp for server-side deadline enforcement. Frontend/client timezone conversion is presentation only and must not affect deadline validity.
+- `ACTIVE` is the normal state while the team progresses through the project's Sprints.
+- Sprint submission, Facilitator review, `CHANGES_REQUESTED`, deployment activity, and ordinary Sprint lateness do not by themselves move the ProjectRun out of `ACTIVE`.
+- ProjectRun time does not pause while a Sprint is `SUBMITTED`, `UNDER_REVIEW`, or `CHANGES_REQUESTED`.
+- Ordinary Sprint lateness does not automatically extend the current Sprint, shift future planned Sprint deadlines, or extend the overall ProjectRun deadline. The delay consumes the ProjectRun's remaining allowed time.
+- Only `ACTIVE` counts as an active ProjectRun for the one-active-ProjectRun rule.
+- `COMPLETED` and `INCOMPLETE` are terminal states and no longer count as active ProjectRuns.
+- After a ProjectRun becomes terminal, no further Sprint state transitions are allowed. Existing Sprint states and submission history remain as historical truth; do not invent terminal Sprint states such as `FAILED`, `ABORTED`, or `EXPIRED`.
+
+Completion:
+- The ProjectRun becomes `COMPLETED` only after Facilitator/Admin reviews the final submission of the final Sprint and confirms that the final deployment and project result satisfy the applicable ProjectVersion requirements.
+- Submission alone never completes the ProjectRun.
+- If the final Sprint requires changes, those fixes remain inside the same final Sprint and, while the ProjectRun deadline still permits team submission/resubmission, must be resubmitted through the normal Sprint review flow.
+- When Facilitator/Admin completes the final Sprint successfully, the final Sprint and the ProjectRun must transition to `COMPLETED` in the same database transaction.
+
+Incomplete outcome:
+- The ProjectRun does not automatically become `INCOMPLETE` when its deadline passes. MVP terminalization is Facilitator/Admin-controlled.
+- Once `deadline_at` has been reached or passed, team members may not create a new Sprint submission or resubmission. Remaining `ACTIVE` until Facilitator/Admin performs the terminal transition does not grant additional team work/submission time.
+- A submission validly created before `deadline_at` may still be reviewed by Facilitator/Admin after the deadline.
+- After the allowed ProjectRun deadline has passed, if the project has not been successfully accepted as complete, Facilitator/Admin may mark the ProjectRun `INCOMPLETE`.
+- Until Facilitator/Admin performs that terminal transition, the ProjectRun remains `ACTIVE` and continues to count under the one-active-ProjectRun rule, but no automatic extra time is granted and the post-deadline team submission/resubmission block still applies.
+- MVP has no Extension workflow, deadline compensation, replacement, failure, trust, or disciplinary workflow. Those areas are handled only by the deferred/post-MVP rules below.
 
 ## 16. Sprint Runtime
 
@@ -343,7 +377,13 @@ Rules:
 - Submission is not approval.
 - Requested fixes happen inside the same Sprint.
 - Finishing early does not move future planned deadlines earlier.
-- Finishing late without approved schedule adjustment does not automatically move future deadlines later.
+- Finishing late without an explicitly approved future schedule adjustment does not automatically move future deadlines later.
+- ProjectRun time continues to pass while a Sprint is waiting for review or changes.
+- A team that submits late risks consuming time that would otherwise have been available for later Sprints; the platform does not automatically compensate for that delay in the MVP.
+- For a ProjectVersion whose required scope includes deployment, every Sprint must end with delivery/deployment of the current integrated increment before Sprint submission. Deployment must be progressive and must not be postponed entirely to the final Sprint.
+- In the MVP, the final Sprint is deterministically the `SprintTemplate` with the highest `sequence` within the fixed ProjectVersion used by the ProjectRun.
+- Do not create a separate FinalSprint model, an `is_final` flag, or a separate final-Sprint reference solely to represent this MVP rule.
+- The final Sprint includes the final deployment/result that Facilitator/Admin reviews against the ProjectVersion requirements before the ProjectRun can be completed.
 - Sprint submission history should be append-only.
 
 Exact submission evidence fields are not finalized.
@@ -355,14 +395,21 @@ MVP review is manual.
 
 No AI reviewer or automated code review.
 
+In the MVP, Facilitator/Admin authority uses the existing Django staff/admin authorization mechanism. Facilitator is not a new participant platform role, and no separate Facilitator role/model/permission architecture should be introduced for the MVP.
+
 Facilitator/Admin controls:
 - opening Sprint
 - review transitions
 - requesting changes
 - completing Sprint
 - controlled ProjectRun status changes
+- marking an overdue, unfinished ProjectRun `INCOMPLETE` in the MVP
 
-Normal users do not perform management transitions.
+Rules:
+- MVP ProjectRun terminal transitions are manual; do not add automatic deadline-expiration jobs merely to change ProjectRun state.
+- Completing the final Sprint successfully must complete the ProjectRun in the same transaction.
+- Normal users do not perform management transitions.
+- Facilitator review turnaround communicated to MVP users is an operational expectation, not a guaranteed SLA and not a source of automatic deadline compensation.
 
 ## 18. Deferred / Not Implemented Now
 
@@ -374,12 +421,38 @@ Do NOT implement now:
 - runtime Task lifecycle
 - Trust algorithm
 - Warning/removal disciplinary workflow
-- Extension workflow
+- post-start team-member departure/replacement/recovery workflow
+- Extension workflow, including Regular Extension and Emergency Extension
 - AI review
 - built-in chat
 - GitHub automation
 
 Do not create speculative tables/abstractions for these deferred areas.
+
+### Post-MVP Extension direction
+
+Extension is completely deferred until after MVP.
+
+- No Extension workflow, including Regular Extension or Emergency Extension, is part of the MVP.
+- Do not implement or create speculative models, tables, fields, migrations, APIs, services, permissions, states, timers, background jobs, or abstractions for Extension in the MVP.
+- Ordinary Sprint lateness or passing a deadline does not automatically create or imply an Extension.
+- All Extension product rules, including type, count/limits, duration, eligibility, allowed Sprint(s), request timing/cutoff, approval/rejection mechanics, deadline effects, repeatability/stacking, terminal behavior, persistence/API design, permissions, and notifications, are intentionally unresolved and will be finalized after MVP.
+- Do not treat any previous Extension proposal or assumption as an accepted product rule unless it is explicitly finalized after MVP and added to this file.
+
+### Post-MVP member departure / replacement direction
+
+The following is future product direction only and must not be implemented in the MVP:
+
+- MVP does not implement post-start replacement, leave recovery, Candidate Pool, or Matching.
+- For the explicitly discussed future case where two active members leave after a ProjectRun has started, the intended direction is to attempt role-preserving replacement while the remaining member stays in the same ProjectRun.
+- A future replacement flow must preserve all historical TeamMember snapshots and Sprint/submission history.
+- Previously identified reserve candidates may be considered first if they are still eligible and available; otherwise a new eligible user may be selected. This must not silently become an automated Matching algorithm.
+- Replacement candidates must satisfy the same role, stack, uniqueness, and one-active-ProjectRun rules at the time of replacement.
+- If the entire active team leaves a ProjectRun, the intended future outcome is a terminal `FAILED` ProjectRun. `FAILED` is not an MVP state and must not be added yet.
+- If replacement cannot be completed within the future allowed replacement window, the intended future outcome may also be `FAILED`; the exact replacement window and mechanics are not finalized.
+- A member who remains and loses the ProjectRun only because other members left and could not be replaced must not receive a negative Trust consequence merely for that failure.
+- A voluntary departure may become a negative Trust input for the member who left, but the exact Trust scoring/algorithm is not finalized and must not be implemented now.
+- The behavior for every partial-departure case, including a single member leaving, invitation/acceptance mechanics, reserve ordering, and timing rules remains unresolved.
 
 ## 19. Current Unresolved Decisions
 
@@ -390,13 +463,16 @@ Do not invent behavior for:
 - final Qualification scope
 - Matching algorithm
 - whether stack affects future Matching pools
-- full ProjectRun state machine
 - exact Sprint submission evidence fields
-- Extension duration formula
+- all Extension product and technical rules, including types, count/limits, duration, eligibility, allowed Sprint(s), request timing/cutoff, approval/rejection mechanics, deadline effects, repeatability/stacking, terminal behavior, persistence/API design, permissions, and notifications; Extension is entirely post-MVP and no behavior should be invented or implemented now
+- post-start member departure/replacement mechanics, including the single-member case, replacement window, reserve selection/ordering, invitation/acceptance, and recovery timing
+- future `FAILED` ProjectRun transition details beyond the accepted direction that full-team departure should eventually fail the run
 - warning thresholds/timers
-- Trust algorithm
+- Trust algorithm and exact scoring effects
 - exact notification timing
 - exact deployment provider
+
+The MVP ProjectRun state machine itself is finalized as `ACTIVE`, `COMPLETED`, and `INCOMPLETE`. Do not add more MVP ProjectRun states.
 
 ## 20. Agent Rules
 

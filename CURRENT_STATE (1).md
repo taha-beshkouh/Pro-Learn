@@ -76,7 +76,7 @@ Validation:
 ---
 
 Phase 5 — Team Formation / Ready Check
-Status: `VALIDATED`
+Status: `IMPLEMENTATION COMPLETE - MANUAL POSTGRESQL VALIDATION PENDING`
 
 Implemented:
 - staff-created TeamFormation for one published ProjectVersion
@@ -95,39 +95,8 @@ Implemented:
 - no Candidate Pool or Matching implementation
 
 Validation:
-- migrations applied successfully
-- PostgreSQL validation completed
-- focused formations tests passed
-- full test suite passed
-
----
-
-Phase 6 — ProjectRun Workspace Read APIs + Minimal Sprint Runtime
-Status: `IMPLEMENTATION COMPLETE - MANUAL POSTGRESQL VALIDATION PENDING`
-
-Implemented:
-- current-member dashboard and workspace read APIs
-- current-member Sprint list and detail APIs
-- historical TeamMember role and selected-stack snapshots in workspace responses
-- role/selected-stack-scoped static work content
-- SprintRun schedule snapshots initialized from SprintTemplate definitions
-- exact six-state Sprint transition workflow
-- Facilitator/Admin-only opening and review transitions
-- one designated current TeamMember submission rule
-- append-only SprintSubmission evidence history
-- transaction.atomic and select_for_update transition services
-- sequential Sprint opening and fixed planned deadline enforcement
-- PostgreSQL constraints/triggers for runtime identity, schedule, sequencing, transitions, submitter compatibility, and append-only history
-- no runtime task lifecycle or other deferred feature implementation
-
-Validation:
-- safe syntax/import compilation passed
-- Django system check passed
-- migration/model state comparison passed with no pending model changes
-- 13 pure Sprint domain tests passed
-- 83 formation tests collected successfully
-- PostgreSQL migration application and database-dependent tests are pending developer validation
-
+- safe non-database checks completed
+- PostgreSQL migrations and database-backed tests require manual developer execution
 ## Current Environment
 
 Development environment:
@@ -194,7 +163,28 @@ Verify them when relevant.
 
 ## Immediate Next Action
 
-Apply the Phase 6 migration and run the focused formations suite against PostgreSQL.
+Review the Phase 5 migrations, including `0003_team_project_run.py` and
+`0004_preserve_ready_check_history.py`, before applying changes.
+
+Then:
+
+```powershell
+.\.venv\Scripts\python.exe manage.py migrate
+```
+
+Run the focused Phase 5 PostgreSQL-dependent tests supplied by Codex.
+
+Finally run the full suite:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q -p no:cacheprovider
+```
+
+After validation:
+
+```powershell
+Remove-Item Env:LOAD_LOCAL_ENV -ErrorAction SilentlyContinue
+```
 
 ## Validation Status Rules
 
@@ -206,3 +196,55 @@ Use these meanings consistently:
 - `IN PROGRESS` — implementation has started but the phase is not complete.
 
 Never mark a PostgreSQL-dependent phase as validated based only on Codex's non-database checks.
+
+Phase 5 — Team Formation / Ready Check
+Status: VALIDATED
+
+Validation:
+- migrations applied successfully
+- PostgreSQL validation completed
+- focused formations tests passed
+- full test suite passed
+
+
+
+## Phase 6 — ProjectRun Workspace Read APIs + Minimal Sprint Runtime
+Status: VALIDATED
+
+Implemented:
+- active ProjectRun dashboard/workspace read APIs
+- SprintRun runtime foundation
+- Sprint list/detail APIs
+- allowed Sprint state transitions
+- Facilitator/Admin-controlled management transitions
+- team-member Sprint submission
+- append-only Sprint submission history
+- member-relevant static Sprint/workspace content filtering
+- no runtime task lifecycle, Kanban, Todo workflow, GitHub automation, or AI review
+
+Validation:
+- migrations applied successfully
+- PostgreSQL validation completed
+- formations tests passed (83 passed)
+- full test suite passed (233 passed)
+
+
+## Phase 7 - MVP ProjectRun Terminal Lifecycle & Deadline Enforcement
+Status: IMPLEMENTATION COMPLETE - MANUAL POSTGRESQL VALIDATION PENDING
+
+Implemented:
+- immutable ProjectRun deadline derived from the fixed ProjectVersion duration
+- exact ProjectRun states: ACTIVE, COMPLETED, and INCOMPLETE
+- inclusive Sprint submission/resubmission cutoff at the ProjectRun deadline
+- post-deadline review of evidence submitted before the deadline
+- canonical final Sprint detection by highest SprintTemplate sequence
+- atomic final Sprint and ProjectRun completion
+- staff-only manual INCOMPLETE transition after the deadline
+- atomic TeamMember membership closure for terminal ProjectRuns
+- terminal Sprint transition/submission blocking and history preservation
+- PostgreSQL constraints/triggers for lifecycle, deadline, and final-Sprint coherence
+- no automatic expiration job, extension workflow, or runtime task lifecycle
+
+Validation:
+- safe syntax, Django system, migration-state, and pure domain checks completed
+- PostgreSQL migration and database-dependent tests pending developer validation

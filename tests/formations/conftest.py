@@ -294,10 +294,44 @@ def runtime_project_run(
 
 
 @pytest.fixture
+def overdue_runtime_project_run(
+    facilitator,
+    helpdesk_version,
+    proposed_members,
+    runtime_sprint_templates,
+):
+    formation_started_at = timezone.now() - timedelta(
+        weeks=helpdesk_version.duration_weeks + 1
+    )
+    formation = create_team_formation(
+        project_version=helpdesk_version,
+        created_by=facilitator,
+        members=proposed_members,
+        now=formation_started_at,
+    )
+    confirmed_at = formation_started_at + timedelta(hours=1)
+    for ready_check in formation.ready_checks.order_by("role__code"):
+        confirm_ready_check(
+            ready_check_id=ready_check.id,
+            user=ready_check.user,
+            now=confirmed_at,
+        )
+    return ProjectRun.objects.get(team__formation=formation)
+
+
+@pytest.fixture
 def runtime_members(runtime_project_run):
     return {
         member.role.code: member
         for member in runtime_project_run.members.select_related("role", "user")
+    }
+
+
+@pytest.fixture
+def overdue_runtime_members(overdue_runtime_project_run):
+    return {
+        member.role.code: member
+        for member in overdue_runtime_project_run.members.select_related("role", "user")
     }
 
 

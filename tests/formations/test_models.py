@@ -296,13 +296,17 @@ def test_database_enforces_one_active_project_run_per_user(
         created_by=facilitator,
         members=proposed_members,
     )
+    second_started_at = timezone.now()
 
     with pytest.raises(IntegrityError) as exc_info, transaction.atomic():
         second_team = Team.objects.create(formation=second_formation)
         second_run = ProjectRun.objects.create(
             team=second_team,
             project_version=helpdesk_version,
-            started_at=timezone.now(),
+            started_at=second_started_at,
+            deadline_at=(
+                second_started_at + timedelta(weeks=helpdesk_version.duration_weeks)
+            ),
         )
         TeamMember.objects.create(
             project_run=second_run,

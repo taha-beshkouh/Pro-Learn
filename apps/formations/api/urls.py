@@ -9,6 +9,7 @@ from apps.formations.api.views import (
     CurrentProjectRunWorkspaceView,
     DeclineReadyCheckView,
     MarkSprintUnderReviewView,
+    MarkProjectRunIncompleteView,
     MyReadyCheckListView,
     ReplaceReadyCheckView,
     RequestSprintChangesView,
@@ -63,6 +64,11 @@ urlpatterns = [
         "project-runs/me/sprints/<uuid:sprint_run_id>/",
         CurrentProjectRunSprintDetailView.as_view(),
         name="current-project-run-sprint-detail",
+    ),
+    path(
+        "project-runs/<uuid:project_run_id>/incomplete/",
+        MarkProjectRunIncompleteView.as_view(),
+        name="mark-project-run-incomplete",
     ),
     path(
         "project-runs/<uuid:project_run_id>/sprints/<uuid:sprint_run_id>/open/",

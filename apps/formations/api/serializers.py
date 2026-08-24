@@ -240,7 +240,9 @@ class ProjectRunDashboardSerializer(serializers.ModelSerializer):
     membership = serializers.SerializerMethodField()
     team = TeamMemberSnapshotSerializer(source="members", many=True, read_only=True)
     current_sprint = serializers.SerializerMethodField()
-    deadline = serializers.SerializerMethodField()
+    deadline = serializers.DateTimeField(
+    source="deadline_at",
+    read_only=True,)
     next_action = serializers.SerializerMethodField()
 
     class Meta:
@@ -248,7 +250,9 @@ class ProjectRunDashboardSerializer(serializers.ModelSerializer):
         fields = (
             "id",
             "project",
+            "state",
             "started_at",
+            "deadline_at",
             "ended_at",
             "membership",
             "current_sprint",
@@ -275,10 +279,7 @@ class ProjectRunDashboardSerializer(serializers.ModelSerializer):
         current = _current_sprint(obj)
         return SprintRunSerializer(current).data if current is not None else None
 
-    def get_deadline(self, obj):
-        current = _current_sprint(obj)
-        return current.planned_end_at if current is not None else obj.ended_at
-
+    
     def get_next_action(self, obj):
         current = _current_sprint(obj)
         return sprint_next_action(
@@ -307,6 +308,13 @@ class ProjectRunWorkspaceSerializer(ProjectRunDashboardSerializer):
             _visible_work_items(project_run=obj, member=obj.requesting_member),
             many=True,
         ).data
+
+
+class ProjectRunLifecycleSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProjectRun
+        fields = ("id", "state", "started_at", "deadline_at", "ended_at")
+        read_only_fields = fields
 
 
 class SprintRunDetailSerializer(SprintRunSerializer):

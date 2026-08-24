@@ -48,3 +48,15 @@ class SprintAccessDenied(FormationDomainError):
 
 class SprintSubmissionNotAllowed(FormationDomainError):
     pass
+
+
+class SprintDeadlinePassed(FormationDomainError):
+    pass
+
+
+class ProjectRunTransitionNotAllowed(FormationDomainError):
+    pass
+
+
+class ProjectRunDeadlineNotReached(FormationDomainError):
+    pass

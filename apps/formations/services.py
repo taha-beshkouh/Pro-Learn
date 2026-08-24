@@ -11,10 +11,13 @@ from apps.formations.exceptions import (
     InvalidFormationMembers,
     InvalidFormationStack,
     MemberHasActiveProjectRun,
+    ProjectRunDeadlineNotReached,
+    ProjectRunTransitionNotAllowed,
     ReadyCheckExpired,
     ReadyCheckNotPending,
     ReadyCheckNotReplaceable,
     SprintAccessDenied,
+    SprintDeadlinePassed,
     SprintRuntimeConfigurationError,
     SprintSubmissionNotAllowed,
     SprintTransitionNotAllowed,
@@ -22,6 +25,7 @@ from apps.formations.exceptions import (
 from apps.formations.models import (
     READY_CHECK_DURATION,
     ProjectRun,
+    ProjectRunState,
     ReadyCheck,
     ReadyCheckStatus,
     SprintRun,
@@ -36,7 +40,7 @@ from apps.projects.exceptions import (
     InvalidProjectStackSelection,
     ProjectConfigurationError,
 )
-from apps.projects.models import ProjectRoleRequirement, ProjectVersion
+from apps.projects.models import ProjectRoleRequirement, ProjectVersion, SprintTemplate
 from apps.projects.services import resolve_project_stack_selection
 
 
@@ -182,6 +186,16 @@ def validate_sprint_transition(*, current_state: str, target_state: str) -> None
         raise SprintTransitionNotAllowed
 
 
+def project_run_deadline(*, started_at, duration_weeks: int):
+    if not duration_weeks or duration_weeks < 1:
+        raise SprintRuntimeConfigurationError
+    return started_at + timedelta(weeks=duration_weeks)
+
+
+def submission_deadline_passed(*, now, deadline_at) -> bool:
+    return now >= deadline_at
+
+
 def sprint_next_action(
     *,
     state: str | None,
@@ -282,6 +296,11 @@ def _ensure_team_and_project_run_locked(
     ):
         raise FormationCompletionConflict
 
+    deadline_at = project_run_deadline(
+        started_at=started_at,
+        duration_weeks=formation.project_version.duration_weeks,
+    )
+
     team, _ = Team.objects.get_or_create(
         formation=formation,
         defaults={"created_at": started_at},
@@ -290,12 +309,16 @@ def _ensure_team_and_project_run_locked(
         team=team,
         defaults={
             "project_version_id": formation.project_version_id,
+            "state": ProjectRunState.ACTIVE,
             "started_at": started_at,
+            "deadline_at": deadline_at,
         },
     )
     if (
         project_run.project_version_id != formation.project_version_id
+        or project_run.state != ProjectRunState.ACTIVE
         or project_run.started_at != started_at
+        or project_run.deadline_at != deadline_at
         or project_run.ended_at is not None
     ):
         raise FormationCompletionConflict
@@ -508,7 +531,10 @@ def _locked_sprint_run(*, sprint_run_id, project_run_id=None):
         .select_related("sprint_template")
         .get(id=sprint_run_id, project_run=project_run)
     )
-    if project_run.ended_at is not None:
+    if (
+        project_run.state != ProjectRunState.ACTIVE
+        or project_run.ended_at is not None
+    ):
         raise SprintTransitionNotAllowed
     return project_run, sprint_run
 
@@ -583,6 +609,8 @@ def submit_sprint(
         raise SprintAccessDenied from exc
     if sprint_run.designated_submitter_id != member.id:
         raise SprintSubmissionNotAllowed
+    if submission_deadline_passed(now=now, deadline_at=project_run.deadline_at):
+        raise SprintDeadlinePassed
     validate_sprint_transition(
         current_state=sprint_run.state,
         target_state=SprintRunState.SUBMITTED,
@@ -608,7 +636,7 @@ def _staff_transition_sprint(
 ) -> SprintRun:
     _require_active_staff(actor=actor)
     now = now or timezone.now()
-    _, sprint_run = _locked_sprint_run(
+    project_run, sprint_run = _locked_sprint_run(
         sprint_run_id=sprint_run_id,
         project_run_id=project_run_id,
     )
@@ -622,7 +650,87 @@ def _staff_transition_sprint(
         sprint_run.completed_at = now
         update_fields.append("completed_at")
     sprint_run.save(update_fields=update_fields)
+    if (
+        target_state == SprintRunState.COMPLETED
+        and _is_final_sprint_run(
+            project_run=project_run,
+            sprint_run=sprint_run,
+        )
+    ):
+        _terminalize_project_run_locked(
+            project_run=project_run,
+            target_state=ProjectRunState.COMPLETED,
+            ended_at=now,
+        )
     return sprint_run
+
+
+def _is_final_sprint_run(*, project_run: ProjectRun, sprint_run: SprintRun) -> bool:
+    final_template_id = (
+        SprintTemplate.objects.filter(project_version_id=project_run.project_version_id)
+        .order_by("-sequence", "-id")
+        .values_list("id", flat=True)
+        .first()
+    )
+    if final_template_id is None:
+        raise SprintRuntimeConfigurationError
+    return sprint_run.sprint_template_id == final_template_id
+
+
+def _terminalize_project_run_locked(
+    *,
+    project_run: ProjectRun,
+    target_state: str,
+    ended_at,
+) -> ProjectRun:
+    if (
+        target_state not in {ProjectRunState.COMPLETED, ProjectRunState.INCOMPLETE}
+        or project_run.state != ProjectRunState.ACTIVE
+        or project_run.ended_at is not None
+    ):
+        raise ProjectRunTransitionNotAllowed
+
+    members = list(
+        TeamMember.objects.select_for_update(of=("self",))
+        .filter(project_run=project_run)
+        .order_by("user_id", "id")
+    )
+    if len(members) != 3 or any(member.ended_at is not None for member in members):
+        raise ProjectRunTransitionNotAllowed
+
+    TeamMember.objects.filter(id__in=[member.id for member in members]).update(
+        ended_at=ended_at
+    )
+    project_run.state = target_state
+    project_run.ended_at = ended_at
+    project_run.save(update_fields=["state", "ended_at"])
+    return project_run
+
+
+@transaction.atomic
+def mark_project_run_incomplete(
+    *,
+    project_run_id,
+    actor: User,
+    now=None,
+) -> ProjectRun:
+    _require_active_staff(actor=actor)
+    now = now or timezone.now()
+    project_run = ProjectRun.objects.select_for_update(of=("self",)).get(
+        id=project_run_id
+    )
+    if (
+        project_run.state != ProjectRunState.ACTIVE
+        or project_run.ended_at is not None
+    ):
+        raise ProjectRunTransitionNotAllowed
+    if now < project_run.deadline_at:
+        raise ProjectRunDeadlineNotReached
+    return _terminalize_project_run_locked(
+        project_run=project_run,
+        target_state=ProjectRunState.INCOMPLETE,
+        ended_at=now,
+    )
 
 
 @transaction.atomic
