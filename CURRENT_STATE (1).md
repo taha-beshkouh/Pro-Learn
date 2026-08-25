@@ -248,3 +248,23 @@ Implemented:
 Validation:
 - safe syntax, Django system, migration-state, and pure domain checks completed
 - PostgreSQL migration and database-dependent tests pending developer validation
+
+
+## Phase 8 - MVP Backend Integration, Security & Lifecycle Hardening
+Status: IMPLEMENTATION COMPLETE - MANUAL POSTGRESQL VALIDATION PENDING
+
+Implemented:
+- end-to-end lifecycle, authorization, deadline, transaction, and query audit
+- inactive-user guards in Ready Check response and Sprint submission services
+- ProjectVersion row locking during ProjectRun initialization
+- immutable ProjectVersion definitions once referenced by a TeamFormation/ProjectRun
+- exact SprintTemplate/SprintRun set integrity for each ProjectRun
+- concurrent final Sprint completion regression coverage
+- expanded participant management-action authorization coverage
+- bounded dashboard/workspace query regression coverage
+- no new product features or deferred-feature architecture
+
+Validation:
+- safe syntax, Django system, migration graph/model-state, and pure unit checks completed
+- Phase 8 PostgreSQL migration and database-dependent tests pending developer validation
+- Phase 7 validation status remains unchanged pending explicit developer confirmation

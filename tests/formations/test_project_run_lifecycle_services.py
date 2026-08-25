@@ -340,3 +340,67 @@ def test_concurrent_incomplete_requests_terminalize_once(
     assert run.state == ProjectRunState.INCOMPLETE
     assert run.members.filter(ended_at=run.ended_at).count() == 3
 
+
+@pytest.mark.django_db(transaction=True)
+def test_concurrent_final_completion_completes_project_run_once(
+    runtime_project_run,
+    runtime_members,
+    facilitator,
+):
+    first, second, final = _ordered_sprints(runtime_project_run)
+    backend = runtime_members["BACKEND_DEVELOPER"]
+    transition_at = runtime_project_run.started_at + timedelta(days=1)
+    _complete_sprint(
+        sprint_run=first,
+        member=backend,
+        facilitator=facilitator,
+        now=transition_at,
+    )
+    _complete_sprint(
+        sprint_run=second,
+        member=backend,
+        facilitator=facilitator,
+        now=transition_at,
+    )
+    open_sprint(
+        sprint_run_id=final.id,
+        designated_submitter_id=backend.id,
+        actor=facilitator,
+        now=transition_at,
+    )
+    submit_sprint(
+        sprint_run_id=final.id,
+        user=backend.user,
+        now=transition_at,
+    )
+    mark_sprint_under_review(
+        sprint_run_id=final.id,
+        actor=facilitator,
+        now=transition_at,
+    )
+    barrier = Barrier(2)
+
+    def complete_once():
+        close_old_connections()
+        try:
+            barrier.wait(timeout=5)
+            actor = type(facilitator).objects.get(id=facilitator.id)
+            try:
+                complete_sprint(
+                    sprint_run_id=final.id,
+                    actor=actor,
+                    now=transition_at,
+                )
+            except (ProjectRunTransitionNotAllowed, SprintTransitionNotAllowed):
+                return "rejected"
+            return "completed"
+        finally:
+            close_old_connections()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _: complete_once(), range(2)))
+
+    assert sorted(results) == ["completed", "rejected"]
+    run = ProjectRun.objects.get(id=runtime_project_run.id)
+    assert run.state == ProjectRunState.COMPLETED
+    assert run.members.filter(ended_at=run.ended_at).count() == 3

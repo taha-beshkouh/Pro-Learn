@@ -296,9 +296,12 @@ def _ensure_team_and_project_run_locked(
     ):
         raise FormationCompletionConflict
 
+    project_version = ProjectVersion.objects.select_for_update(of=("self",)).get(
+        id=formation.project_version_id
+    )
     deadline_at = project_run_deadline(
         started_at=started_at,
-        duration_weeks=formation.project_version.duration_weeks,
+        duration_weeks=project_version.duration_weeks,
     )
 
     team, _ = Team.objects.get_or_create(
@@ -377,6 +380,8 @@ def _ensure_team_and_project_run_locked(
 
 
 def _respond_to_ready_check(*, ready_check_id, user: User, confirm: bool, now=None):
+    if not user.is_active:
+        raise InvalidFormationMembers
     now = now or timezone.now()
     expired = False
     with transaction.atomic():
@@ -594,6 +599,8 @@ def submit_sprint(
     project_run_id=None,
     now=None,
 ) -> tuple[SprintRun, SprintSubmission]:
+    if not user.is_active:
+        raise SprintAccessDenied
     now = now or timezone.now()
     project_run, sprint_run = _locked_sprint_run(
         sprint_run_id=sprint_run_id,

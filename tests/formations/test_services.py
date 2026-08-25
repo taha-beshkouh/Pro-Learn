@@ -34,6 +34,25 @@ from apps.formations.services import (
 pytestmark = pytest.mark.django_db
 
 
+@pytest.mark.parametrize("response_service", [confirm_ready_check, decline_ready_check])
+@pytest.mark.django_db(transaction=True)
+def test_inactive_member_cannot_respond_to_ready_check(
+    formation,
+    backend_user,
+    response_service,
+):
+    ready_check = formation.ready_checks.get(user=backend_user)
+    backend_user.is_active = False
+    backend_user.save(update_fields=["is_active"])
+
+    with pytest.raises(InvalidFormationMembers):
+        response_service(ready_check_id=ready_check.id, user=backend_user)
+
+    ready_check.refresh_from_db()
+    assert ready_check.status == ReadyCheckStatus.PENDING
+    assert ready_check.responded_at is None
+
+
 def test_create_formation_has_exact_roles_stacks_and_48_hour_ready_checks(
     facilitator, helpdesk_version, proposed_members
 ):

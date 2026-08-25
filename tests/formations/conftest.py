@@ -282,6 +282,7 @@ def runtime_project_run(
     helpdesk_version,
     proposed_members,
     runtime_sprint_templates,
+    runtime_work_items,
 ):
     formation = create_team_formation(
         project_version=helpdesk_version,
@@ -299,6 +300,7 @@ def overdue_runtime_project_run(
     helpdesk_version,
     proposed_members,
     runtime_sprint_templates,
+    runtime_work_items,
 ):
     formation_started_at = timezone.now() - timedelta(
         weeks=helpdesk_version.duration_weeks + 1

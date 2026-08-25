@@ -2,9 +2,12 @@ import pytest
 
 from apps.formations.api.serializers import (
     MyReadyCheckSerializer,
+    ProjectRunDashboardSerializer,
+    ProjectRunWorkspaceSerializer,
     TeamFormationSerializer,
 )
 from apps.formations.selectors import (
+    active_project_run_for_user,
     current_ready_checks_for_user,
     formation_detail,
 )
@@ -49,3 +52,20 @@ def test_completed_formation_serialization_stays_at_two_queries(
 
     assert data["team_id"] is not None
     assert data["project_run_id"] is not None
+
+
+def test_dashboard_and_workspace_serialization_use_bounded_prefetches(
+    django_assert_num_queries,
+    runtime_project_run,
+    runtime_members,
+):
+    backend = runtime_members["BACKEND_DEVELOPER"]
+
+    with django_assert_num_queries(5):
+        project_run = active_project_run_for_user(user=backend.user)
+        dashboard = ProjectRunDashboardSerializer(project_run).data
+        workspace = ProjectRunWorkspaceSerializer(project_run).data
+
+    assert dashboard["id"] == str(runtime_project_run.id)
+    assert len(workspace["team"]) == 3
+    assert len(workspace["sprints"]) == 3

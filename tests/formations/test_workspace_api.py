@@ -127,18 +127,31 @@ def test_non_member_cannot_read_or_submit_another_project_run(
     )
 
 
+@pytest.mark.parametrize(
+    ("action", "payload"),
+    [
+        ("open", None),
+        ("under-review", {}),
+        ("request-changes", {}),
+        ("complete", {}),
+    ],
+)
 def test_normal_member_cannot_perform_management_transition(
     api_client,
     runtime_project_run,
     runtime_members,
+    action,
+    payload,
 ):
     backend = runtime_members["BACKEND_DEVELOPER"]
     first = _ordered_sprints(runtime_project_run)[0]
     api_client.force_login(backend.user)
+    if payload is None:
+        payload = {"designated_submitter_id": str(backend.id)}
 
     response = api_client.post(
-        _action_url(runtime_project_run, first, "open"),
-        {"designated_submitter_id": str(backend.id)},
+        _action_url(runtime_project_run, first, action),
+        payload,
         format="json",
     )
 

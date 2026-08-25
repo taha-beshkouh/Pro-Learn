@@ -164,6 +164,30 @@ def test_only_staff_manage_and_only_designated_current_member_submits(
         submit_sprint(sprint_run_id=first.id, user=outside_user)
 
 
+@pytest.mark.django_db(transaction=True)
+def test_inactive_designated_member_cannot_submit(
+    runtime_project_run,
+    runtime_members,
+    facilitator,
+):
+    first = _ordered_sprints(runtime_project_run)[0]
+    backend = runtime_members["BACKEND_DEVELOPER"]
+    open_sprint(
+        sprint_run_id=first.id,
+        designated_submitter_id=backend.id,
+        actor=facilitator,
+    )
+    backend.user.is_active = False
+    backend.user.save(update_fields=["is_active"])
+
+    with pytest.raises(SprintAccessDenied):
+        submit_sprint(sprint_run_id=first.id, user=backend.user)
+
+    first.refresh_from_db()
+    assert first.state == SprintRunState.ACTIVE
+    assert first.submissions.count() == 0
+
+
 def test_early_or_late_completion_does_not_move_future_schedule(
     runtime_project_run,
     runtime_members,
