@@ -1,0 +1,807 @@
+dataset:
+  name: Helpdesk Lite Level 1 Sprint Content
+  purpose: Canonical DB-ready content specification for the existing Helpdesk Lite Level 1 ProjectVersion.
+  notes:
+  - Use the repository's existing ProjectVersion binding/population mechanism; do not hard-code this dataset by project slug in runtime code.
+  - All role-specific work items are stack-neutral in this version, so technology_stack is null.
+  - 'Shared work items use role: null and technology_stack: null.'
+  - Titles, descriptions, ordering, sprint sequence, and schedule are canonical and should not be rewritten during population.
+  sprints:
+  - sequence: 1
+    title: Product Foundation & Authentication
+    brief: >-
+      Create the shared product and technical foundation for Helpdesk Lite. The team should align on the core Requester and Agent flows, establish the backend and frontend foundations, integrate real authentication end to end, and deploy the first usable version. The goal is a stable base for later Sprints, not a complete Helpdesk feature set.
+    planned_start_offset_days: 0
+    planned_duration_days: 7
+    work_items:
+    - role: BACKEND_DEVELOPER
+      technology_stack: null
+      position: 1
+      title: Establish the Backend Project Foundation
+      description: >-
+        Set up the backend with one of the allowed stacks and a clear, maintainable project structure. The application must run in development with configuration separated from source code. Avoid speculative infrastructure or abstraction that is not needed by the current product scope.
+    - role: BACKEND_DEVELOPER
+      technology_stack: null
+      position: 2
+      title: Configure MySQL and Database Access
+      description: >-
+        Connect the backend to MySQL 8 / InnoDB with credentials kept out of source control. Ensure the migration workflow and local database setup are usable and repeatable. Only the database foundation is required here; the Ticket domain is introduced in Sprint 2.
+    - role: BACKEND_DEVELOPER
+      technology_stack: null
+      position: 3
+      title: Implement Authentication and User Context
+      description: >-
+        Implement the required authentication flow so the backend can identify the authenticated user and protect private API routes. Invalid or unauthenticated access must fail predictably. Keep the scope to the authentication needed by Helpdesk Lite; do not add OAuth, social login, MFA, or similar extras.
+    - role: BACKEND_DEVELOPER
+      technology_stack: null
+      position: 4
+      title: Define Initial API Conventions and Error Responses
+      description: >-
+        Establish simple, consistent conventions for API responses, validation errors, authentication failures, and HTTP status codes so the frontend can integrate without guessing. Do not build a custom response framework when normal framework conventions are sufficient.
+    - role: BACKEND_DEVELOPER
+      technology_stack: null
+      position: 5
+      title: Establish the Automated Testing Foundation
+      description: >-
+        Prepare the backend test setup and add meaningful coverage for authentication and protected API behavior. The test structure should support domain, permission, and integration coverage in later Sprints. Testing is part of the implementation workflow from the start, not deferred to the final Sprint.
+    - role: BACKEND_DEVELOPER
+      technology_stack: null
+      position: 6
+      title: Publish the Initial API Documentation
+      description: >-
+        Expose the current API contract through usable Swagger/OpenAPI documentation so the frontend can integrate against real behavior. Keep the documentation synchronized with the implementation as the project evolves.
+    - role: FRONTEND_DEVELOPER
+      technology_stack: null
+      position: 1
+      title: Establish the Frontend Application Foundation
+      description: >-
+        Set up the application with React, TypeScript, Vite, and React Router using a structure that can grow through later Sprints without unnecessary rewrites. Do not add state-management libraries, UI frameworks, or architectural layers unless the current implementation genuinely needs them.
+    - role: FRONTEND_DEVELOPER
+      technology_stack: null
+      position: 2
+      title: Implement Application Routing and Protected Navigation
+      description: >-
+        Create the initial routing structure and define how authenticated and unauthenticated users move through the application. Protected application areas must not be usable without a valid authenticated session.
+    - role: FRONTEND_DEVELOPER
+      technology_stack: null
+      position: 3
+      title: Build and Integrate the Authentication Experience
+      description: >-
+        Implement the Login experience against the real backend authentication flow. Handle success, failure, and authentication state correctly, and move authenticated users into the protected application. Do not leave the final flow dependent on mock login behavior.
+    - role: FRONTEND_DEVELOPER
+      technology_stack: null
+      position: 4
+      title: Create the Initial Authenticated App Shell
+      description: >-
+        Build the initial authenticated application shell, including the navigation and main content structure that later Ticket screens will use. It should be functional and responsive, but it does not need final visual polish or a complete design system.
+    - role: FRONTEND_DEVELOPER
+      technology_stack: null
+      position: 5
+      title: Establish API Communication and Common UI States
+      description: >-
+        Create a simple, reusable approach for communicating with the backend and handling common loading, API error, and authentication-failure states. Keep the abstraction proportional to the project instead of building a generic API framework.
+    - role: FRONTEND_DEVELOPER
+      technology_stack: null
+      position: 6
+      title: Establish the Responsive UI Foundation
+      description: >-
+        Verify the Authentication experience and App Shell across the main viewport sizes and establish the responsive rules that later feature screens can follow. The goal is a usable foundation, not final responsive QA for the full product.
+    - role: PRODUCT_DESIGNER
+      technology_stack: null
+      position: 1
+      title: Define the Core Requester and Agent Flows
+      description: >-
+        Map the essential Requester and Agent journeys so the team shares the same understanding of the product. Focus on the main paths and important decision points rather than documenting every future edge case.
+    - role: PRODUCT_DESIGNER
+      technology_stack: null
+      position: 2
+      title: Define the Initial Information Architecture
+      description: >-
+        Define the initial navigation and relationship between the main Helpdesk screens so the frontend can build the App Shell and routing from a clear product structure. Keep the information architecture within the MVP scope.
+    - role: PRODUCT_DESIGNER
+      technology_stack: null
+      position: 3
+      title: Design the Authentication Experience
+      description: >-
+        Design the main Login interaction and its loading, validation, and failure states so it can be implemented directly. The design should describe behavior, not only a static visual.
+    - role: PRODUCT_DESIGNER
+      technology_stack: null
+      position: 4
+      title: Design the Initial Authenticated App Shell
+      description: >-
+        Design the initial structure of the authenticated workspace, including navigation, main content hierarchy, and user context. The shell should support the Ticket experiences introduced in later Sprints and include basic responsive behavior.
+    - role: PRODUCT_DESIGNER
+      technology_stack: null
+      position: 5
+      title: Create Initial Wireframes for the Core Ticket Screens
+      description: >-
+        Prepare initial wireframes for Ticket List, Create Ticket, and Ticket Detail so the team can resolve major structural ambiguity before Sprint 2. These are foundations for implementation, not final visual designs.
+    - role: PRODUCT_DESIGNER
+      technology_stack: null
+      position: 6
+      title: Define the Initial Responsive Behavior
+      description: >-
+        Define the basic responsive behavior for Authentication, the App Shell, and the core Ticket screens. Focus on hierarchy, navigation, and usability rather than producing an excessive number of breakpoint-specific mockups.
+    - role: null
+      technology_stack: null
+      position: 1
+      title: Align on the Core Product Flows
+      description: >-
+        Backend Developer, Frontend Developer, and Product Designer should align on the main Requester and Agent flows, Sprint 1 boundaries, and the contracts needed to start implementation. Resolve product ambiguities that would block the next Sprint.
+    - role: null
+      technology_stack: null
+      position: 2
+      title: Integrate Authentication End to End
+      description: >-
+        Verify Authentication from the real frontend through the real backend. A user must be able to log in, be recognized by the backend, and enter the protected application with clear failure behavior when authentication is invalid.
+    - role: null
+      technology_stack: null
+      position: 3
+      title: Deploy and Review the First Integrated Version
+      description: >-
+        Deploy the first integrated version and review it as a team. Authentication, the application shell, and frontend/backend connectivity should work on the deployed build, and major blockers for Sprint 2 should be identified or resolved.
+  - sequence: 2
+    title: Requester Ticket Experience
+    brief: >-
+      Build the first complete Helpdesk workflow for the Requester. An authenticated Requester should be able to create a Ticket, view only their own Tickets, and open Ticket Detail. The backend must enforce ownership, validation, categories, and server-owned defaults, while the frontend and design deliver a usable Create → List → Detail experience against the real API.
+    planned_start_offset_days: 7
+    planned_duration_days: 7
+    work_items:
+    - role: BACKEND_DEVELOPER
+      technology_stack: null
+      position: 1
+      title: Model the Core Ticket Domain
+      description: >-
+        Create the core Ticket domain with Requester ownership, subject or title, description, Category, Status, Priority, assignment state, and required timestamps. New Tickets must start OPEN, NORMAL, and unassigned. Do not introduce Comments, History, reassignment, SLA, or other later-scope features.
+    - role: BACKEND_DEVELOPER
+      technology_stack: null
+      position: 2
+      title: Provide Predefined Ticket Categories
+      description: >-
+        Provide the predefined Categories required by Helpdesk Lite using the project's existing data population mechanism. Requesters must choose valid existing Categories; do not add user-created Categories, category administration UI, or hierarchy features.
+    - role: BACKEND_DEVELOPER
+      technology_stack: null
+      position: 3
+      title: Implement Requester Ticket Creation
+      description: >-
+        Implement Ticket creation for an authenticated Requester. Ownership and initial Status, Priority, and assignment must be server-controlled, not accepted from client input. Return validation errors in the established API format.
+    - role: BACKEND_DEVELOPER
+      technology_stack: null
+      position: 4
+      title: Implement Requester Ticket List and Detail Access
+      description: >-
+        Provide Ticket List and Detail access so a Requester can see only their own Tickets. Ownership must be enforced in backend queries and permissions, not by hiding unauthorized data in the frontend. Search, advanced filters, and pagination are deferred to Sprint 5.
+    - role: BACKEND_DEVELOPER
+      technology_stack: null
+      position: 5
+      title: Enforce Ticket Validation and Requester Permissions
+      description: >-
+        Complete validation and permission rules for the Requester workflow, including required fields, valid Categories, ownership, read access, and protection of server-owned fields. Frontend validation may improve UX, but the backend remains authoritative.
+    - role: BACKEND_DEVELOPER
+      technology_stack: null
+      position: 6
+      title: Test and Document the Requester Ticket API
+      description: >-
+        Add automated tests for creation, ownership, canonical defaults, Category validation, List/Detail access, and important failure paths. Update Swagger/OpenAPI so the frontend sees the real Ticket contract.
+    - role: FRONTEND_DEVELOPER
+      technology_stack: null
+      position: 1
+      title: Build the Requester Ticket List
+      description: >-
+        Build the Requester Ticket List using the real API. Show enough information to identify Tickets and open Ticket Detail, and handle loading, empty, and API-failure states. Do not add advanced Search, Filter, or bulk-management behavior yet.
+    - role: FRONTEND_DEVELOPER
+      technology_stack: null
+      position: 2
+      title: Build the Requester Ticket Creation Flow
+      description: >-
+        Build the Create Ticket form against the real backend contract, including Category selection, validation feedback, submit state, success behavior, and failure handling. Do not expose server-owned Status, Priority, assignment, or Requester identity as editable inputs.
+    - role: FRONTEND_DEVELOPER
+      technology_stack: null
+      position: 3
+      title: Build the Requester Ticket Detail
+      description: >-
+        Build Ticket Detail for the Requester using the real API. Present the main Ticket information, Category, current Status, Priority, assignment state, and useful timestamps. Leave room for Comments and History later without implementing those features early.
+    - role: FRONTEND_DEVELOPER
+      technology_stack: null
+      position: 4
+      title: Handle Requester Validation and Interface States
+      description: >-
+        Implement consistent loading, empty, validation-error, API-failure, unauthorized/not-found, and submit-in-progress behavior across the Requester flow. The interface should not rely on the happy path only.
+    - role: FRONTEND_DEVELOPER
+      technology_stack: null
+      position: 5
+      title: Integrate the Complete Requester Flow
+      description: >-
+        Connect Ticket List, Create Ticket, and Ticket Detail into one coherent authenticated flow. After creation, the UI must reflect backend state correctly and navigation must not depend on mocks or temporary local-only data.
+    - role: FRONTEND_DEVELOPER
+      technology_stack: null
+      position: 6
+      title: Complete Responsive Requester Behavior
+      description: >-
+        Make Ticket List, Create Ticket, and Ticket Detail usable across the main viewport sizes. Focus on hierarchy, forms, actions, and readability rather than final visual polish.
+    - role: PRODUCT_DESIGNER
+      technology_stack: null
+      position: 1
+      title: Finalize the Requester Ticket Journey
+      description: >-
+        Finalize the Requester journey from Ticket List through creation and Ticket Detail, including navigation and success behavior. Keep Agent operations and later Sprint features outside this flow.
+    - role: PRODUCT_DESIGNER
+      technology_stack: null
+      position: 2
+      title: Design the Requester Ticket List
+      description: >-
+        Design the Ticket List so Requesters can recognize their Tickets, understand current state, and enter Ticket Detail quickly. Include the empty state and core information hierarchy without introducing Sprint 5 Search and Filter complexity.
+    - role: PRODUCT_DESIGNER
+      technology_stack: null
+      position: 3
+      title: Design the Create Ticket Experience
+      description: >-
+        Design a clear Create Ticket experience with input hierarchy, Category selection, validation feedback, and submit behavior. Only fields genuinely controlled by the Requester should appear as inputs.
+    - role: PRODUCT_DESIGNER
+      technology_stack: null
+      position: 4
+      title: Design the Requester Ticket Detail
+      description: >-
+        Design Ticket Detail as the stable foundation for the Ticket lifecycle. Present the main Ticket data and state clearly, while leaving the structure capable of receiving Comments and History in later Sprints without implementing placeholders for them.
+    - role: PRODUCT_DESIGNER
+      technology_stack: null
+      position: 5
+      title: Define Requester Empty, Loading, Error, and Validation States
+      description: >-
+        Define the important non-happy-path states for Ticket List, Create, and Detail so the frontend can implement them consistently. Focus on behavior and hierarchy rather than producing excessive separate mockups.
+    - role: PRODUCT_DESIGNER
+      technology_stack: null
+      position: 6
+      title: Review Responsive Requester Usability
+      description: >-
+        Review the Requester flow across different screen sizes and define the responsive decisions needed for Ticket List, forms, actions, and Detail. Optimize for usability without overproducing breakpoint-specific designs.
+    - role: null
+      technology_stack: null
+      position: 1
+      title: Align the Ticket Contract and Requester Flow
+      description: >-
+        Align the Ticket fields, Requester-controlled inputs, server-owned defaults, Category behavior, validation rules, and Create → List → Detail flow across Design, Frontend, and Backend.
+    - role: null
+      technology_stack: null
+      position: 2
+      title: Verify the Requester Flow End to End
+      description: >-
+        Run the real Requester flow from Login through Ticket creation, List, and Detail. Include at least one invalid-input case and one ownership case so the Sprint is not validated only on the happy path.
+    - role: null
+      technology_stack: null
+      position: 3
+      title: Deploy and Review the Requester Experience
+      description: >-
+        Deploy the integrated Sprint and review the Requester flow on the deployed version. Resolve major integration, permission, or usability issues that would block the Agent workflow in Sprint 3.
+  - sequence: 3
+    title: Agent Workflow
+    brief: >-
+      Complete the core Agent workflow on real Tickets. Agents should be able to discover claimable work, atomically claim an unassigned Ticket, and then manage Status and Priority only when assigned. The backend must enforce concurrency, assignment ownership, and valid transitions; the frontend and design must reflect real assignment, conflict, and permission states. The Sprint ends with a working Requester → Agent → Resolve flow.
+    planned_start_offset_days: 14
+    planned_duration_days: 7
+    work_items:
+    - role: BACKEND_DEVELOPER
+      technology_stack: null
+      position: 1
+      title: Implement the Agent Ticket Workspace
+      description: >-
+        Provide the Agent-facing Ticket visibility needed for operational work: unassigned Tickets that can be claimed and Tickets assigned to the current Agent. Enforce visibility in backend queries and permissions rather than relying on frontend hiding.
+    - role: BACKEND_DEVELOPER
+      technology_stack: null
+      position: 2
+      title: Implement Atomic Ticket Claiming
+      description: >-
+        Allow an Agent to claim an unassigned Ticket safely. Concurrent claim attempts must result in at most one successful assignment, and conflicts must return predictable API behavior. Use database transaction/concurrency controls appropriate to the selected backend stack.
+    - role: BACKEND_DEVELOPER
+      technology_stack: null
+      position: 3
+      title: Enforce Assigned-Agent Permissions
+      description: >-
+        After Claim, only the assigned Agent may perform Agent-owned mutations such as Status and Priority changes. Other Agents, Requesters, and unauthorized users must be rejected consistently across all relevant write paths.
+    - role: BACKEND_DEVELOPER
+      technology_stack: null
+      position: 4
+      title: Implement the Ticket Status Workflow
+      description: >-
+        Enforce the core Ticket state progression OPEN → IN_PROGRESS → RESOLVED. Only the assigned Agent may perform valid transitions. Skip, backward, and reopen transitions are outside the Core MVP and must be rejected.
+    - role: BACKEND_DEVELOPER
+      technology_stack: null
+      position: 5
+      title: Implement Agent Priority Management
+      description: >-
+        Allow the assigned Agent to change Priority between LOW, NORMAL, and HIGH. Reject invalid values and unauthorized actors. Do not add SLA-driven, automatic, or scored priority behavior.
+    - role: BACKEND_DEVELOPER
+      technology_stack: null
+      position: 6
+      title: Test and Document the Agent Workflow
+      description: >-
+        Add automated tests for Agent visibility, Claim, concurrent Claim, cross-Agent denial, assigned-Agent permissions, valid and invalid Status transitions, and Priority changes. Update Swagger/OpenAPI to match the real workflow.
+    - role: FRONTEND_DEVELOPER
+      technology_stack: null
+      position: 1
+      title: Build the Agent Ticket Workspace
+      description: >-
+        Build the Agent workspace from the real API so unassigned/claimable Tickets and the current Agent's assigned Tickets are clearly distinguishable. Handle loading, empty, and failure states without turning the interface into a Kanban or analytics dashboard.
+    - role: FRONTEND_DEVELOPER
+      technology_stack: null
+      position: 2
+      title: Implement the Ticket Claim Experience
+      description: >-
+        Integrate Claim with the backend and handle loading, success, and conflict states. The frontend must treat the backend result as authoritative, especially when another Agent claims the Ticket first.
+    - role: FRONTEND_DEVELOPER
+      technology_stack: null
+      position: 3
+      title: Add Assignment-Aware Ticket Actions
+      description: >-
+        Update Ticket Detail so Agent actions reflect the real assignment state. Assigned Agents should see the actions they may perform; unassigned or other-Agent states must not present misleading controls. Backend authorization remains authoritative.
+    - role: FRONTEND_DEVELOPER
+      technology_stack: null
+      position: 4
+      title: Implement Status Transition Controls
+      description: >-
+        Implement controls for the valid OPEN → IN_PROGRESS → RESOLVED progression and synchronize the UI with backend responses. Do not expose invalid backward, skip, or Reopen actions.
+    - role: FRONTEND_DEVELOPER
+      technology_stack: null
+      position: 5
+      title: Implement Priority Management
+      description: >-
+        Allow the assigned Agent to view and change Priority using LOW, NORMAL, and HIGH. Handle loading and failure states correctly, and do not expose edit controls to actors who do not own the action.
+    - role: FRONTEND_DEVELOPER
+      technology_stack: null
+      position: 6
+      title: Harden the Agent Workflow States and Responsiveness
+      description: >-
+        Handle Claim conflicts, stale assignment, permission failures, status/priority update failures, empty states, and the main responsive layouts. Reconcile stale frontend state with authoritative backend responses rather than adding realtime infrastructure.
+    - role: PRODUCT_DESIGNER
+      technology_stack: null
+      position: 1
+      title: Finalize the Core Agent Journey
+      description: >-
+        Finalize the Agent journey from finding an unassigned Ticket through Claim, Status/Priority management, and Resolve. Keep Reassignment, Reopen, supervisory workflows, and other deferred features out of the core journey.
+    - role: PRODUCT_DESIGNER
+      technology_stack: null
+      position: 2
+      title: Design the Agent Ticket Workspace
+      description: >-
+        Design a clear Agent workspace for distinguishing claimable Tickets from the Agent's own assigned work. Preserve a simple Helpdesk workflow rather than turning it into a complex task-management dashboard.
+    - role: PRODUCT_DESIGNER
+      technology_stack: null
+      position: 3
+      title: Design the Claim and Assignment States
+      description: >-
+        Design the key Claim states: unassigned, submitting, successfully assigned, and no longer available because another Agent claimed the Ticket first. Assignment ownership should remain obvious in Ticket Detail.
+    - role: PRODUCT_DESIGNER
+      technology_stack: null
+      position: 4
+      title: Design Status and Priority Management
+      description: >-
+        Design Status and Priority interactions around the real domain rules. The interface should communicate the valid Status progression and the LOW/NORMAL/HIGH priority choices without suggesting invalid operations.
+    - role: PRODUCT_DESIGNER
+      technology_stack: null
+      position: 5
+      title: Define Permission and Conflict States for Agents
+      description: >-
+        Define understandable UX for unavailable actions, permission denial, Claim conflict, and state changes that occur between viewing and acting. Translate product states into clear user feedback rather than exposing raw backend errors.
+    - role: PRODUCT_DESIGNER
+      technology_stack: null
+      position: 6
+      title: Review Responsive Agent Usability
+      description: >-
+        Review the Agent workspace and Ticket Detail across the main viewport sizes, focusing on action placement, Claim behavior, Status/Priority controls, and readability.
+    - role: null
+      technology_stack: null
+      position: 1
+      title: Align Assignment, Permission, and State Rules
+      description: >-
+        Align the exact Unassigned/Assigned semantics, Claim behavior, allowed actors, Status transitions, and Priority rules across Backend, Frontend, and Design before final integration.
+    - role: null
+      technology_stack: null
+      position: 2
+      title: Verify the Requester-to-Agent Workflow End to End
+      description: >-
+        Run a real Ticket from Requester creation through Agent Claim, Status changes, Priority change, and Resolve. Include at least one unauthorized Agent case and one Claim conflict.
+    - role: null
+      technology_stack: null
+      position: 3
+      title: Deploy and Review the Complete Core Ticket Workflow
+      description: >-
+        Deploy the Sprint and review the full Requester → Agent → Resolve flow on the deployed version. Resolve major permission, concurrency, synchronization, or usability problems that would block Sprint 4.
+  - sequence: 4
+    title: Collaboration & Ticket History
+    brief: >-
+      Add collaboration and an auditable Ticket lifecycle. Requesters may comment on their own Tickets and the assigned Agent may reply; Comments are immutable and no new Comments are allowed after RESOLVED. Claim, Status changes, and Priority changes must create immutable system History that remains distinct from human Comments. The completed Sprint should provide a coherent conversation and trustworthy activity trail from Ticket creation through Resolve.
+    planned_start_offset_days: 21
+    planned_duration_days: 7
+    work_items:
+    - role: BACKEND_DEVELOPER
+      technology_stack: null
+      position: 1
+      title: Model Immutable Ticket Comments
+      description: >-
+        Create the Comment domain with Ticket, author, body, and creation time. Comments are create/read only in the Core MVP and must not gain edit, delete, attachment, internal-note, reaction, or threaded-reply features.
+    - role: BACKEND_DEVELOPER
+      technology_stack: null
+      position: 2
+      title: Enforce Comment Visibility and Creation Permissions
+      description: >-
+        Allow a Requester to comment only on their own Ticket and an Agent to comment only when assigned to that Ticket. Reading Comments must follow the Ticket's authorized visibility. Other users and Agents must be rejected by the backend.
+    - role: BACKEND_DEVELOPER
+      technology_stack: null
+      position: 3
+      title: Enforce the Resolved Ticket Comment Boundary
+      description: >-
+        Reject all new Comments after a Ticket reaches RESOLVED while keeping existing Comments readable. This rule must be enforced by the backend and must not depend only on disabling the frontend composer.
+    - role: BACKEND_DEVELOPER
+      technology_stack: null
+      position: 4
+      title: Implement Immutable Ticket History
+      description: >-
+        Record system-generated History for at least Claim, Status Change, and Priority Change. Each entry should preserve the meaningful event, actor, time, and old/new values where relevant. Keep the implementation domain-specific; do not build a generic event-sourcing platform.
+    - role: BACKEND_DEVELOPER
+      technology_stack: null
+      position: 5
+      title: Integrate History with Ticket Mutations Atomically
+      description: >-
+        Keep Ticket mutations and their successful History entries transactionally consistent. Failed or unauthorized operations must not create success History, and only the winning Agent in a concurrent Claim should generate the Claim event.
+    - role: BACKEND_DEVELOPER
+      technology_stack: null
+      position: 6
+      title: Expose, Test, and Document Comments and History
+      description: >-
+        Expose the required Comment and History APIs, add automated coverage for permissions, immutability, resolved restrictions, History generation, failed-operation behavior, and deterministic ordering, and update Swagger/OpenAPI.
+    - role: FRONTEND_DEVELOPER
+      technology_stack: null
+      position: 1
+      title: Integrate Comments into Ticket Detail
+      description: >-
+        Load and render Ticket Comments in Ticket Detail from the real API. Show the author, content, and useful timing clearly, and handle loading, empty, and failure states as part of the Ticket experience.
+    - role: FRONTEND_DEVELOPER
+      technology_stack: null
+      position: 2
+      title: Implement Comment Creation
+      description: >-
+        Allow authorized users to submit Comments through the real API, with clear submit, success, validation, and permission-failure behavior. Keep the interaction simple; rich text, attachments, mentions, and chat features are out of scope.
+    - role: FRONTEND_DEVELOPER
+      technology_stack: null
+      position: 3
+      title: Implement the Resolved Ticket Read-Only Experience
+      description: >-
+        Keep existing Comments and History visible after RESOLVED while removing or disabling the ability to add new Comments. Handle stale UI correctly if the Ticket is resolved between viewing and submission.
+    - role: FRONTEND_DEVELOPER
+      technology_stack: null
+      position: 4
+      title: Render Ticket History as System Activity
+      description: >-
+        Render Claim, Status Change, and Priority Change as understandable system activity. Human Comments and system History must be visually and semantically distinct, and raw event payloads must not be shown directly to users.
+    - role: FRONTEND_DEVELOPER
+      technology_stack: null
+      position: 5
+      title: Integrate Conversation and History into a Coherent Ticket Detail
+      description: >-
+        Combine Ticket metadata, actions, Comments, and History into a coherent Ticket Detail without building an unnecessary generic activity-feed framework. Preserve the semantic distinction between human conversation and system activity.
+    - role: FRONTEND_DEVELOPER
+      technology_stack: null
+      position: 6
+      title: Harden Collaboration States and Responsiveness
+      description: >-
+        Verify empty and long conversations, many History entries, submission failures, resolved/stale states, permission errors, and the main responsive layouts so Ticket Detail remains usable as content grows.
+    - role: PRODUCT_DESIGNER
+      technology_stack: null
+      position: 1
+      title: Define the Ticket Collaboration Experience
+      description: >-
+        Define how Requester and assigned Agent collaborate inside Ticket Detail, including where Comments live, how responses are understood, and how interaction changes when the Ticket becomes resolved.
+    - role: PRODUCT_DESIGNER
+      technology_stack: null
+      position: 2
+      title: Design Human Comments
+      description: >-
+        Design readable, asynchronous Ticket Comments that clearly identify author, content, and time. Do not turn the product into a realtime chat interface with typing, presence, reactions, or read receipts.
+    - role: PRODUCT_DESIGNER
+      technology_stack: null
+      position: 3
+      title: Design System-Generated Ticket History
+      description: >-
+        Design clear system activity for Claim, Status Change, and Priority Change. History should help users understand what changed without exposing raw technical audit-log data.
+    - role: PRODUCT_DESIGNER
+      technology_stack: null
+      position: 4
+      title: Refine the Ticket Detail Information Hierarchy
+      description: >-
+        Revisit Ticket Detail after adding Agent actions, Comments, and History so metadata, actions, conversation, and lifecycle remain understandable instead of becoming visually crowded.
+    - role: PRODUCT_DESIGNER
+      technology_stack: null
+      position: 5
+      title: Design the Resolved and Read-Only States
+      description: >-
+        Design the post-RESOLVED state so users understand that the Ticket is closed, previous Comments and History remain readable, and no new Comment or implicit Reopen action is available.
+    - role: PRODUCT_DESIGNER
+      technology_stack: null
+      position: 6
+      title: Review Collaboration States and Responsive Usability
+      description: >-
+        Review Ticket Detail with short and long conversations, History, errors, resolved state, and different viewport sizes. Keep essential actions and information usable as the page becomes richer.
+    - role: null
+      technology_stack: null
+      position: 1
+      title: Align Comment and History Semantics
+      description: >-
+        Align the difference between human Comments and system History, Comment permissions, the RESOLVED boundary, and the information carried by History events across Backend, Frontend, and Design.
+    - role: null
+      technology_stack: null
+      position: 2
+      title: Verify the Complete Collaborative Ticket Lifecycle
+      description: >-
+        Run a fresh Ticket through Requester Comment, Agent Claim, Agent response, Status/Priority changes, and Resolve. Verify that only successful operations create History and that new Comments are rejected after RESOLVED.
+    - role: null
+      technology_stack: null
+      position: 3
+      title: Deploy and Review the Collaborative Ticket Experience
+      description: >-
+        Deploy the Sprint and review Ticket Detail, Comments, History, and resolved behavior on the deployed version. Resolve major integration, permission, audit-consistency, or usability issues before Sprint 5.
+  - sequence: 5
+    title: Findability & Product Hardening
+    brief: >-
+      Make the feature-complete Helpdesk easier to navigate and more reliable. Add Search, Filter, and Pagination within each user's existing visibility scope, then audit authorization, validation, database integrity, query behavior, frontend state handling, responsiveness, and product consistency. The goal is not to expand scope, but to remove significant weaknesses so Sprint 6 can focus on final delivery.
+    planned_start_offset_days: 28
+    planned_duration_days: 7
+    work_items:
+    - role: BACKEND_DEVELOPER
+      technology_stack: null
+      position: 1
+      title: Implement Ticket Search
+      description: >-
+        Add simple Ticket Search within the actor's authorized Ticket scope, primarily over meaningful Ticket text such as subject/title and, where appropriate, description. Search must not reveal unauthorized data through results, counts, or behavior. Do not add an external search engine.
+    - role: BACKEND_DEVELOPER
+      technology_stack: null
+      position: 2
+      title: Implement Ticket Filtering
+      description: >-
+        Add the core Ticket filters for Status, Priority, and Category within the existing visibility scope. Combined and invalid filters should behave predictably, and filtering must never expand authorization.
+    - role: BACKEND_DEVELOPER
+      technology_stack: null
+      position: 3
+      title: Implement Stable Ticket Pagination and Ordering
+      description: >-
+        Provide deterministic ordering and Pagination for Ticket lists after authorization, Search, and Filter are applied. Use the project's normal API conventions and avoid a custom pagination framework.
+    - role: BACKEND_DEVELOPER
+      technology_stack: null
+      position: 4
+      title: Audit Authorization and Validation Across the Ticket Lifecycle
+      description: >-
+        Review the full Ticket lifecycle for consistent ownership, assignment, permission, validation, transition, Comment, and resolved-state enforcement. Fix only demonstrated gaps and add regression coverage where needed; do not use this Sprint as permission for broad refactoring.
+    - role: BACKEND_DEVELOPER
+      technology_stack: null
+      position: 5
+      title: Review Database Integrity and Query Behavior
+      description: >-
+        Review constraints, indexes, and important query paths for correctness and obvious performance problems such as N+1 or repeated queries. Optimize only where evidence supports it. Do not introduce Redis, caching infrastructure, or speculative indexes merely because the data is read-heavy.
+    - role: BACKEND_DEVELOPER
+      technology_stack: null
+      position: 6
+      title: Expand Regression Coverage and Finalize API Documentation
+      description: >-
+        Add regression coverage for Search, Filter, Pagination, cross-feature authorization, and important hardening fixes. Finalize Swagger/OpenAPI so it reflects the stable current API contract.
+    - role: FRONTEND_DEVELOPER
+      technology_stack: null
+      position: 1
+      title: Integrate Ticket Search
+      description: >-
+        Integrate Search with the backend for the relevant Ticket lists. Handle active query, loading, no-result, failure, and reset behavior. Do not substitute client-side filtering of a partial paginated result set for real Search.
+    - role: FRONTEND_DEVELOPER
+      technology_stack: null
+      position: 2
+      title: Integrate Ticket Filters
+      description: >-
+        Integrate Status, Priority, and Category filters with the backend. Active filters and reset behavior should be obvious, combinations should remain understandable, and the UI should stay proportional to the small MVP filter set.
+    - role: FRONTEND_DEVELOPER
+      technology_stack: null
+      position: 3
+      title: Implement Ticket Pagination and List State Synchronization
+      description: >-
+        Integrate Pagination with Search and Filters and keep page state valid when query criteria change. Treat backend pagination as authoritative and avoid stale or impossible page states.
+    - role: FRONTEND_DEVELOPER
+      technology_stack: null
+      position: 4
+      title: Harden Loading, Empty, Error, and Permission States
+      description: >-
+        Review and align important interface states across Requester and Agent flows. Distinguish no data, no search results, API failure, permission denial, stale data, and not-found cases instead of collapsing them into one generic message.
+    - role: FRONTEND_DEVELOPER
+      technology_stack: null
+      position: 5
+      title: Audit Frontend Integration and Remove Temporary Workarounds
+      description: >-
+        Remove or correct temporary mocks, hard-coded development values, stale state patterns, duplicate integration logic, and workarounds that now threaten correctness or maintainability. Avoid broad architecture rewrites that are not required by real problems.
+    - role: FRONTEND_DEVELOPER
+      technology_stack: null
+      position: 6
+      title: Complete the Cross-Product Responsive and Usability Hardening
+      description: >-
+        Run a cross-product responsive pass over Ticket lists, Search/Filters, Pagination, Ticket Detail, Agent actions, Comments, and History. Fix major usability and layout problems without turning the Sprint into cosmetic redesign.
+    - role: PRODUCT_DESIGNER
+      technology_stack: null
+      position: 1
+      title: Design the Ticket Search Experience
+      description: >-
+        Design simple, discoverable Search behavior for Requester and Agent Ticket lists, including active query, reset, and no-result states. Keep the experience proportional to Helpdesk Lite rather than introducing advanced query syntax.
+    - role: PRODUCT_DESIGNER
+      technology_stack: null
+      position: 2
+      title: Design Ticket Filtering and Active Filter States
+      description: >-
+        Design Status, Priority, and Category filters, including combinations, active-filter visibility, reset behavior, and responsive use. Avoid a complex query-builder or oversized filtering system.
+    - role: PRODUCT_DESIGNER
+      technology_stack: null
+      position: 3
+      title: Design Pagination and Result Navigation
+      description: >-
+        Design result navigation that works coherently with Search and Filters and remains usable on smaller screens. Preserve context while keeping the interaction simple.
+    - role: PRODUCT_DESIGNER
+      technology_stack: null
+      position: 4
+      title: Audit Product States and Interaction Consistency
+      description: >-
+        Review loading, empty, validation, error, permission, Claim conflict, resolved, and no-result states across the implementation. Identify meaningful terminology or interaction inconsistencies for correction.
+    - role: PRODUCT_DESIGNER
+      technology_stack: null
+      position: 5
+      title: Review End-to-End Requester and Agent Usability
+      description: >-
+        Run the complete Requester and Agent journeys on the actual implementation and identify important friction in navigation, action hierarchy, continuity, and discoverability. Keep new feature ideas outside the Sprint scope.
+    - role: PRODUCT_DESIGNER
+      technology_stack: null
+      position: 6
+      title: Complete the Responsive Product Review
+      description: >-
+        Review the real product across major viewport sizes and identify high-priority responsive issues across Search, Filters, lists, Ticket Detail, Agent actions, Comments, and History.
+    - role: null
+      technology_stack: null
+      position: 1
+      title: Align Search, Filter, and Pagination Contracts
+      description: >-
+        Align Search behavior, Filter values, ordering, Pagination semantics, and empty/no-result states across Backend, Frontend, and Design so all layers interpret the same contract.
+    - role: null
+      technology_stack: null
+      position: 2
+      title: Run a Cross-Role Product Hardening Review
+      description: >-
+        Review the main Requester and Agent flows with varied data and important failure cases. Prioritize correctness, security, broken integration, and serious usability defects over cosmetic polish.
+    - role: null
+      technology_stack: null
+      position: 3
+      title: Deploy and Review the Hardened Product Version
+      description: >-
+        Deploy the hardened Sprint and review Search, Filters, Pagination, and the main product flows on the deployed version. Resolve major delivery blockers so Sprint 6 begins from a stable build.
+  - sequence: 6
+    title: Final Integration & Production Delivery
+    brief: >-
+      Take the feature-complete product from stable to delivery-ready. Verify the complete Requester and Agent lifecycles, security, database integrity, automated tests, documentation, responsive behavior, and production configuration on the actual deployed version. No new core feature should be introduced here; only defects or gaps that block correctness, usability, or delivery should be fixed before final acceptance.
+    planned_start_offset_days: 35
+    planned_duration_days: 7
+    work_items:
+    - role: BACKEND_DEVELOPER
+      technology_stack: null
+      position: 1
+      title: Verify the Complete Requester and Agent API Lifecycle
+      description: >-
+        Run the complete API lifecycle across Authentication, Ticket creation, ownership, Agent visibility, Claim, Status, Priority, Comments, History, Search, Filters, and Pagination. Fix delivery-blocking defects without introducing new product features.
+    - role: BACKEND_DEVELOPER
+      technology_stack: null
+      position: 2
+      title: Perform the Final Authorization and Security Review
+      description: >-
+        Perform a final review of authentication, ownership, assignment authorization, protected fields, cross-user access, cross-Agent access, and permission-sensitive query behavior. Fix real security gaps and add regression coverage where needed.
+    - role: BACKEND_DEVELOPER
+      technology_stack: null
+      position: 3
+      title: Verify Final Database Integrity and Transactional Correctness
+      description: >-
+        Verify Ticket defaults, ownership relations, assignment rules, concurrent Claim behavior, Status transitions, Priority values, Comment restrictions, and History consistency. Add constraints or transactional fixes only when a real correctness gap is proven.
+    - role: BACKEND_DEVELOPER
+      technology_stack: null
+      position: 4
+      title: Complete and Run the Final Automated Test Suite
+      description: >-
+        Run the complete automated test suite and ensure meaningful coverage exists for core flows, permissions, validation, concurrency, and regression-sensitive behavior. Do not weaken valid production rules or assertions merely to make tests pass.
+    - role: BACKEND_DEVELOPER
+      technology_stack: null
+      position: 5
+      title: Finalize OpenAPI and Backend README Documentation
+      description: >-
+        Finalize Swagger/OpenAPI and the backend README with practical setup, configuration, database, migration, run, test, and API-access instructions. Documentation must match the actual implementation and be usable by a new reviewer.
+    - role: BACKEND_DEVELOPER
+      technology_stack: null
+      position: 6
+      title: Verify Backend Production Readiness and Deployment
+      description: >-
+        Verify the deployed backend configuration, database connectivity, applied migrations, API reachability, authentication, environment-based secrets, and any required CORS/origin behavior. The final backend must work outside the local development environment.
+    - role: FRONTEND_DEVELOPER
+      technology_stack: null
+      position: 1
+      title: Verify the Complete Requester Experience
+      description: >-
+        Run the final Requester experience from Login through Ticket List, creation, Detail, Comments, and Search/Filter/Pagination. Verify navigation and important loading, validation, error, resolved, and permission states on the real application.
+    - role: FRONTEND_DEVELOPER
+      technology_stack: null
+      position: 2
+      title: Verify the Complete Agent Experience
+      description: >-
+        Run the final Agent experience from workspace through Claim, Assignment, Status, Priority, Comments, History, and Resolve. Verify Claim conflicts, permission-aware states, and stale-data recovery.
+    - role: FRONTEND_DEVELOPER
+      technology_stack: null
+      position: 3
+      title: Finalize Cross-Product Error, Empty, and Permission States
+      description: >-
+        Finalize consistent UI behavior for no data, no search results, validation errors, API failures, permission denial, not-found data, Claim conflicts, and resolved restrictions. Translate backend failures into clear product feedback.
+    - role: FRONTEND_DEVELOPER
+      technology_stack: null
+      position: 4
+      title: Complete the Final Responsive and Accessibility Pass
+      description: >-
+        Complete the final responsive pass and verify basic accessibility essentials such as usable labels, keyboard-operable controls, visible focus, readable feedback, and semantic interactions. Do not turn the Sprint into a certification or redesign project.
+    - role: FRONTEND_DEVELOPER
+      technology_stack: null
+      position: 5
+      title: Remove Development-Only Frontend Behavior and Produce the Final Build
+      description: >-
+        Remove temporary mocks, local-only URLs, debug behavior, placeholder credentials, and development fallbacks that should not ship. Produce a clean production build using the project's real environment configuration.
+    - role: FRONTEND_DEVELOPER
+      technology_stack: null
+      position: 6
+      title: Deploy and Verify the Final Frontend Application
+      description: >-
+        Deploy the final frontend and verify routing, authentication persistence, direct URL navigation, refresh behavior, API connectivity, assets, and responsive behavior against the final backend.
+    - role: PRODUCT_DESIGNER
+      technology_stack: null
+      position: 1
+      title: Perform the Final Requester Experience Review
+      description: >-
+        Review the real Requester journey for clarity, navigation, hierarchy, validation feedback, Ticket states, and usability. Prioritize issues that block understanding or task completion over minor cosmetic preferences.
+    - role: PRODUCT_DESIGNER
+      technology_stack: null
+      position: 2
+      title: Perform the Final Agent Experience Review
+      description: >-
+        Review the real Agent workspace and lifecycle for discoverability, feedback, state clarity, Claim, Status, Priority, Comments, History, and Resolve. Do not expand the scope with new feature concepts during final QA.
+    - role: PRODUCT_DESIGNER
+      technology_stack: null
+      position: 3
+      title: Audit Implementation Against the Intended Product Flows
+      description: >-
+        Compare the implemented product against the agreed flows and design decisions. Focus on meaningful behavior, hierarchy, and interaction deviations rather than pixel-perfect matching.
+    - role: PRODUCT_DESIGNER
+      technology_stack: null
+      position: 4
+      title: Complete the Final State and Content Consistency Review
+      description: >-
+        Review terminology, labels, statuses, empty/error states, system History, permission messages, and primary calls to action across the product so the same concept is not presented inconsistently without reason.
+    - role: PRODUCT_DESIGNER
+      technology_stack: null
+      position: 5
+      title: Perform the Final Responsive and Usability Review
+      description: >-
+        Review the deployed product across major viewport sizes and identify serious layout, readability, navigation, or action-placement issues. Small cosmetic differences should not block delivery.
+    - role: PRODUCT_DESIGNER
+      technology_stack: null
+      position: 6
+      title: Review the Final Product Scope and Delivery Quality
+      description: >-
+        Review the final build against the official Helpdesk Lite MVP scope. Confirm required core features are present and that deferred features have not appeared as incomplete or confusing partial implementations.
+    - role: null
+      technology_stack: null
+      position: 1
+      title: Run the Final End-to-End Acceptance Review
+      description: >-
+        Run the main Requester and Agent journeys through the real UI, backend, and database behavior. Confirm correctness, permissions, state transitions, and usability on the integrated version.
+    - role: null
+      technology_stack: null
+      position: 2
+      title: Finalize Documentation and Delivery Readiness
+      description: >-
+        Finalize backend tests, Swagger/OpenAPI, README, frontend production behavior, and the information required for another reviewer to run and evaluate the project without relying on undocumented team knowledge.
+    - role: null
+      technology_stack: null
+      position: 3
+      title: Deploy and Review the Final Product
+      description: >-
+        Deploy the final product and perform the final review on that exact version. Verify Requester and Agent flows, Search/Filters/Pagination, Comments/History, error states, and responsive behavior. After this review, fix only real delivery defects; do not add scope.

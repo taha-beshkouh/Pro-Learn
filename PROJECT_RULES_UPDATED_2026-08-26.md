@@ -139,7 +139,26 @@ Static project/Sprint work items may be:
 - optionally stack-specific
 - optionally associated with a SprintTemplate
 
-They are informational project content only.
+They are informational project content only and are separate from the runtime Sprint/ProjectRun lifecycle.
+
+Canonical content semantics:
+- `SprintTemplate` owns Sprint-level definition data such as sequence, title, brief, and relative schedule.
+- `ProjectTaskTemplate` (static work content) owns ordered role/shared work content associated with the fixed ProjectVersion/SprintTemplate.
+- `role = NULL` and `technology_stack = NULL` means shared/team-wide content.
+- `role != NULL` and `technology_stack = NULL` means generic content for that role across its allowed stacks.
+- `role != NULL` and `technology_stack != NULL` means content scoped to that role and that exact stack.
+- `role = NULL` with a non-NULL `technology_stack` is invalid and must remain prevented by database/domain integrity rules.
+- Static work ordering must remain deterministic. The current ordering contract is `position`, then `id` as a stable tie-breaker.
+- Runtime visibility must include shared content plus the requesting member's matching role content and matching stack-specific content, without cross-role or cross-stack leakage.
+- Runtime content must resolve through the exact ProjectVersion fixed on the ProjectRun, never through the latest ProjectVersion, project slug/name, or project-specific branching.
+
+Hybrid content ownership:
+- Backend owns semantic/domain/versioned data and content, ordering, visibility rules, permissions, and runtime truth.
+- Frontend owns page/layout composition, visual components, styles, icons, progress visualizations, responsive behavior, and static/decorative assets.
+- Backend must not store or depend on React/JSX component paths, CSS/layout instructions, or physical frontend filesystem paths.
+- Static/decorative images may live in the frontend asset structure when appropriate.
+- If project-specific/versioned media becomes a real requirement later, introduce the smallest semantic media reference needed (for example an asset key/reference) without coupling the backend to frontend file paths. Do not build a CMS, media library, upload system, object-storage integration, or CDN layer before a real requirement exists.
+- The architecture should remain cache-friendly by keeping static definition content separable from dynamic/user-specific runtime data, but caching infrastructure must be added only after evidence of a real performance need. Do not add Redis/Memcached merely because static content is read-heavy.
 
 Do NOT implement runtime:
 - task statuses
@@ -264,7 +283,23 @@ Stretch only:
 - reassignment
 - simple dashboard
 
-Exact Sprint-by-Sprint work distribution is not finalized. Do not invent it.
+Helpdesk Lite Sprint distribution is finalized for the current Level 1 content specification. Do not invent, rename, redistribute, or silently rewrite Sprint content during population.
+
+Canonical Sprint plan:
+- Sprint 1 — `Product Foundation & Authentication` — start offset 0 days, duration 7 days. Foundation, authentication, initial app/product structure, first integrated deployment.
+- Sprint 2 — `Requester Ticket Experience` — start offset 7 days, duration 7 days. Requester Create → List → Detail flow, ownership, categories, validation, responsive implementation.
+- Sprint 3 — `Agent Workflow` — start offset 14 days, duration 7 days. Agent operational visibility, atomic Claim, assigned-Agent permissions, Status/Priority workflow, concurrency handling.
+- Sprint 4 — `Collaboration & Ticket History` — start offset 21 days, duration 7 days. Immutable Comments, resolved comment boundary, immutable system History, atomic mutation/history consistency.
+- Sprint 5 — `Findability & Product Hardening` — start offset 28 days, duration 7 days. Search, Filter, Pagination, authorization/validation audit, query/database review, responsive/product hardening.
+- Sprint 6 — `Final Integration & Production Delivery` — start offset 35 days, duration 7 days. Final lifecycle/security/database verification, full automated tests, documentation, production build/deployment, implementation QA and final acceptance.
+
+Current content rules for this specification:
+- Each Sprint has role-specific content for Backend Developer, Frontend Developer, and Product Designer, plus concise shared/team-wide integration content.
+- The accepted role-specific Helpdesk work items are currently stack-neutral, so their `technology_stack` is `NULL`; do not duplicate them per backend stack without a genuine stack-specific requirement.
+- Shared Helpdesk work items use `role = NULL` and `technology_stack = NULL`.
+- Testing is part of the work throughout the project, not postponed to the final Sprint.
+- Each Sprint should produce/review the current integrated increment; deployment must not be postponed entirely to Sprint 6.
+- The row-level canonical titles, descriptions, positions, roles, and briefs supplied for the content-population task are authoritative for the current Helpdesk ProjectVersion. Population code must reproduce that dataset rather than generate or infer new content.
 
 ## 11. Healthchecks Lite / Event Ticketing Lite
 
@@ -457,7 +492,6 @@ The following is future product direction only and must not be implemented in th
 ## 19. Current Unresolved Decisions
 
 Do not invent behavior for:
-- exact Helpdesk Sprint-by-Sprint work distribution
 - detailed Healthchecks Lite scope
 - detailed Event Ticketing Lite scope
 - final Qualification scope
@@ -484,6 +518,7 @@ The MVP ProjectRun state machine itself is finalized as `ACTIVE`, `COMPLETED`, a
 - If it does not block implementation, choose the least-committal technical design.
 - Platform backend uses Python + Django + DRF + PostgreSQL.
 - Participant project technologies such as .NET or MySQL must never be confused with the platform backend/database.
+- Frontend ownership described in the hybrid content rules is an architecture boundary only; backend/Codex work must not implement frontend components/assets unless a future task explicitly changes that responsibility.
 - Work only on backend code, database models/migrations, APIs, permissions/security, and tests.
 - Do not work on Docker, Git/GitHub setup, CI/CD, deployment automation, or frontend implementation.
 

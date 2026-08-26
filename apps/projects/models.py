@@ -268,7 +268,13 @@ class ProjectTaskTemplate(models.Model):
         ordering = ["position", "id"]
         constraints = [
             models.UniqueConstraint(
-                fields=["project_version", "role", "technology_stack", "position"],
+                fields=[
+                    "project_version",
+                    "sprint_template",
+                    "role",
+                    "technology_stack",
+                    "position",
+                ],
                 nulls_distinct=False,
                 name="projects_work_item_scope_position_unique",
             ),

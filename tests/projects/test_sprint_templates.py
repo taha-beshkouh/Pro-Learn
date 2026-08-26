@@ -5,6 +5,7 @@ from django.core.exceptions import ValidationError
 from django.db import IntegrityError, connection, transaction
 from django.db.models import ProtectedError
 
+from apps.profiles.models import TechnologyStack
 from apps.projects.models import ProjectTaskTemplate, ProjectVersion, SprintTemplate
 
 
@@ -72,6 +73,191 @@ def test_work_content_can_be_scheduled_or_unscheduled(helpdesk_version):
 
     assert scheduled.sprint_template == sprint
     assert unscheduled.sprint_template is None
+
+
+def test_duplicate_shared_position_in_same_sprint_is_rejected(helpdesk_version):
+    sprint = make_sprint(helpdesk_version)
+    ProjectTaskTemplate.objects.create(
+        project_version=helpdesk_version,
+        sprint_template=sprint,
+        title="First shared Sprint item",
+        position=200,
+    )
+
+    with pytest.raises(IntegrityError), transaction.atomic():
+        ProjectTaskTemplate.objects.create(
+            project_version=helpdesk_version,
+            sprint_template=sprint,
+            title="Duplicate shared Sprint item",
+            position=200,
+        )
+
+
+def test_duplicate_unscheduled_position_in_same_scope_is_rejected(helpdesk_version):
+    ProjectTaskTemplate.objects.create(
+        project_version=helpdesk_version,
+        title="First unscheduled shared item",
+        position=201,
+    )
+
+    with pytest.raises(IntegrityError), transaction.atomic():
+        ProjectTaskTemplate.objects.create(
+            project_version=helpdesk_version,
+            title="Duplicate unscheduled shared item",
+            position=201,
+        )
+
+
+def test_same_scope_position_is_allowed_in_different_sprints(
+    helpdesk_version,
+    backend_role,
+):
+    first_sprint = make_sprint(helpdesk_version, sequence=1)
+    second_sprint = make_sprint(helpdesk_version, sequence=2, start=5)
+
+    first = ProjectTaskTemplate.objects.create(
+        project_version=helpdesk_version,
+        sprint_template=first_sprint,
+        role=backend_role,
+        title="First Sprint backend item",
+        position=202,
+    )
+    second = ProjectTaskTemplate.objects.create(
+        project_version=helpdesk_version,
+        sprint_template=second_sprint,
+        role=backend_role,
+        title="Second Sprint backend item",
+        position=202,
+    )
+
+    assert first.sprint_template_id != second.sprint_template_id
+
+
+def test_duplicate_role_stack_position_in_same_sprint_is_rejected(
+    helpdesk_version,
+    backend_role,
+    django_stack,
+):
+    sprint = make_sprint(helpdesk_version)
+    ProjectTaskTemplate.objects.create(
+        project_version=helpdesk_version,
+        sprint_template=sprint,
+        role=backend_role,
+        technology_stack=django_stack,
+        title="First Django backend item",
+        position=203,
+    )
+
+    with pytest.raises(IntegrityError), transaction.atomic():
+        ProjectTaskTemplate.objects.create(
+            project_version=helpdesk_version,
+            sprint_template=sprint,
+            role=backend_role,
+            technology_stack=django_stack,
+            title="Duplicate Django backend item",
+            position=203,
+        )
+
+
+def test_different_roles_in_same_sprint_may_reuse_position(
+    helpdesk_version,
+    backend_role,
+    frontend_role,
+):
+    sprint = make_sprint(helpdesk_version)
+
+    backend_item = ProjectTaskTemplate.objects.create(
+        project_version=helpdesk_version,
+        sprint_template=sprint,
+        role=backend_role,
+        title="Backend item",
+        position=204,
+    )
+    frontend_item = ProjectTaskTemplate.objects.create(
+        project_version=helpdesk_version,
+        sprint_template=sprint,
+        role=frontend_role,
+        title="Frontend item",
+        position=204,
+    )
+
+    assert backend_item.role_id != frontend_item.role_id
+
+
+def test_shared_and_role_item_in_same_sprint_may_reuse_position(
+    helpdesk_version,
+    backend_role,
+):
+    sprint = make_sprint(helpdesk_version)
+
+    shared_item = ProjectTaskTemplate.objects.create(
+        project_version=helpdesk_version,
+        sprint_template=sprint,
+        title="Shared item",
+        position=205,
+    )
+    backend_item = ProjectTaskTemplate.objects.create(
+        project_version=helpdesk_version,
+        sprint_template=sprint,
+        role=backend_role,
+        title="Backend item",
+        position=205,
+    )
+
+    assert shared_item.role_id is None
+    assert backend_item.role_id == backend_role.id
+
+
+def test_same_role_with_different_stacks_in_same_sprint_may_reuse_position(
+    helpdesk_version,
+    backend_role,
+    django_stack,
+):
+    aspnet_stack = TechnologyStack.objects.get(code="aspnet-core-ef-core")
+    sprint = make_sprint(helpdesk_version)
+
+    django_item = ProjectTaskTemplate.objects.create(
+        project_version=helpdesk_version,
+        sprint_template=sprint,
+        role=backend_role,
+        technology_stack=django_stack,
+        title="Django backend item",
+        position=206,
+    )
+    aspnet_item = ProjectTaskTemplate.objects.create(
+        project_version=helpdesk_version,
+        sprint_template=sprint,
+        role=backend_role,
+        technology_stack=aspnet_stack,
+        title="ASP.NET backend item",
+        position=206,
+    )
+
+    assert django_item.technology_stack_id != aspnet_item.technology_stack_id
+
+
+def test_scheduled_and_unscheduled_items_may_reuse_scope_position(
+    helpdesk_version,
+    backend_role,
+):
+    sprint = make_sprint(helpdesk_version)
+
+    scheduled = ProjectTaskTemplate.objects.create(
+        project_version=helpdesk_version,
+        sprint_template=sprint,
+        role=backend_role,
+        title="Scheduled backend item",
+        position=207,
+    )
+    unscheduled = ProjectTaskTemplate.objects.create(
+        project_version=helpdesk_version,
+        role=backend_role,
+        title="Unscheduled backend item",
+        position=207,
+    )
+
+    assert scheduled.sprint_template_id == sprint.id
+    assert unscheduled.sprint_template_id is None
 
 
 def test_sprint_cannot_be_deleted_while_static_work_references_it(helpdesk_version):
