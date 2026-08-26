@@ -2,6 +2,7 @@ import pytest
 
 from apps.formations.models import ProjectRunState, SprintRunState
 from apps.formations.services import confirm_ready_check
+from apps.projects.models import ProjectVersion
 
 
 pytestmark = [pytest.mark.django_db, pytest.mark.postgresql]
@@ -91,6 +92,17 @@ def test_workspace_and_sprint_detail_show_only_member_relevant_static_content(
         in {"Shared Sprint work", "Django backend work", "Shared project resource"}
     }
     assert visible_resource_ids == expected_resource_ids
+    canonical_version = ProjectVersion.objects.get(
+        project_template__slug="helpdesk-lite",
+        version_number=1,
+    )
+    canonical_work_item_ids = {
+        str(item_id)
+        for item_id in canonical_version.work_items.values_list("id", flat=True)
+    }
+    assert {
+        item["id"] for item in workspace.data["resources"]
+    }.isdisjoint(canonical_work_item_ids)
     assert detail.status_code == 200
     visible_sprint_ids = {
         item["id"] for item in detail.data["work_items"] if item["id"] in fixture_ids
@@ -101,6 +113,9 @@ def test_workspace_and_sprint_detail_show_only_member_relevant_static_content(
         if item.title in {"Shared Sprint work", "Django backend work"}
     }
     assert visible_sprint_ids == expected_sprint_ids
+    assert {
+        item["id"] for item in detail.data["work_items"]
+    }.isdisjoint(canonical_work_item_ids)
     assert detail.data["submissions"] == []
 
 

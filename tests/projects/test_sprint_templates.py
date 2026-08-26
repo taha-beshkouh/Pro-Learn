@@ -12,6 +12,16 @@ from apps.projects.models import ProjectTaskTemplate, ProjectVersion, SprintTemp
 pytestmark = [pytest.mark.django_db, pytest.mark.postgresql]
 
 
+@pytest.fixture
+def helpdesk_version(helpdesk_template):
+    """Keep isolated Sprint schema tests off the populated canonical version."""
+    return ProjectVersion.objects.create(
+        project_template=helpdesk_template,
+        version_number=2,
+        sprint_count=6,
+    )
+
+
 def make_sprint(version, *, sequence=1, start=0, duration=5, title="Sprint"):
     return SprintTemplate.objects.create(
         project_version=version,
@@ -48,13 +58,22 @@ def test_same_sprint_sequence_is_allowed_in_different_versions(
 ):
     second_version = ProjectVersion.objects.create(
         project_template=helpdesk_version.project_template,
-        version_number=2,
+        version_number=helpdesk_version.version_number + 1,
     )
 
     make_sprint(helpdesk_version, sequence=1)
     make_sprint(second_version, sequence=1)
 
-    assert SprintTemplate.objects.filter(sequence=1).count() == 2
+    matching_sprints = SprintTemplate.objects.filter(
+        project_version__in=(helpdesk_version, second_version),
+        sequence=1,
+    )
+
+    assert matching_sprints.count() == 2
+    assert set(matching_sprints.values_list("project_version_id", flat=True)) == {
+        helpdesk_version.id,
+        second_version.id,
+    }
 
 
 def test_work_content_can_be_scheduled_or_unscheduled(helpdesk_version):
@@ -276,7 +295,7 @@ def test_sprint_cannot_be_deleted_while_static_work_references_it(helpdesk_versi
 def test_cross_version_work_assignment_fails_model_validation(helpdesk_version):
     second_version = ProjectVersion.objects.create(
         project_template=helpdesk_version.project_template,
-        version_number=2,
+        version_number=helpdesk_version.version_number + 1,
     )
     sprint = make_sprint(second_version)
     work_item = ProjectTaskTemplate(
@@ -302,7 +321,7 @@ def set_work_item_version_constraints_immediate():
 def test_cross_version_work_assignment_is_rejected_by_database(helpdesk_version):
     second_version = ProjectVersion.objects.create(
         project_template=helpdesk_version.project_template,
-        version_number=2,
+        version_number=helpdesk_version.version_number + 1,
     )
     sprint = make_sprint(second_version)
 
@@ -321,7 +340,7 @@ def test_moving_referenced_sprint_to_another_version_is_rejected_by_database(
 ):
     second_version = ProjectVersion.objects.create(
         project_template=helpdesk_version.project_template,
-        version_number=2,
+        version_number=helpdesk_version.version_number + 1,
     )
     sprint = make_sprint(helpdesk_version)
     ProjectTaskTemplate.objects.create(
@@ -336,7 +355,3 @@ def test_moving_referenced_sprint_to_another_version_is_rejected_by_database(
             project_version=second_version
         )
         set_work_item_version_constraints_immediate()
-
-
-def test_helpdesk_sprint_distribution_is_not_seeded(helpdesk_version):
-    assert helpdesk_version.sprint_templates.count() == 0

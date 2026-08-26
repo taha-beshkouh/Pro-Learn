@@ -45,7 +45,11 @@ def test_helpdesk_known_version_data_is_seeded(helpdesk_version):
     assert helpdesk_version.weekly_effort_hours_max == 12
     assert helpdesk_version.participant_database == "MySQL 8 / InnoDB"
     assert helpdesk_version.is_published is True
-    assert helpdesk_version.work_items.count() == 16
+    assert helpdesk_version.sprint_templates.count() == 6
+    assert helpdesk_version.work_items.count() == 126
+    assert not helpdesk_version.work_items.filter(
+        sprint_template__isnull=True
+    ).exists()
 
 
 def test_helpdesk_role_stack_policies_are_seeded(helpdesk_version):

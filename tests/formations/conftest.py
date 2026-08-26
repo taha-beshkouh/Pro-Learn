@@ -115,9 +115,10 @@ def formation_catalog():
         slug="helpdesk-lite",
         defaults={"name": "Helpdesk Lite", "level": level},
     )[0]
+    # Version 1 is migration-owned canonical content; runtime fixtures stay isolated.
     project_version = ProjectVersion.objects.update_or_create(
         project_template=project_template,
-        version_number=1,
+        version_number=2,
         defaults={
             "duration_weeks": 6,
             "sprint_count": 6,

@@ -1,8 +1,10 @@
+from collections import Counter
+
 import pytest
 
-from apps.profiles.models import RoleCode
+from apps.profiles.models import Role, RoleCode, TechnologyStack
 from apps.projects.exceptions import ProjectConfigurationError
-from apps.projects.models import ProjectTaskTemplate, SprintTemplate
+from apps.projects.models import ProjectTaskTemplate
 
 
 pytestmark = pytest.mark.django_db
@@ -42,39 +44,92 @@ def test_helpdesk_detail_without_role_has_only_general_content(
     assert version["duration_weeks"] == 6
     assert version["sprint_count"] == 6
     assert version["role_context"] is None
-    assert len(version["shared_work_items"]) == 16
-    assert version["sprint_templates"] == []
+    assert len(version["shared_work_items"]) == 18
+    assert [sprint["sequence"] for sprint in version["sprint_templates"]] == [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+    ]
+
+
+@pytest.mark.parametrize(
+    ("role_code", "stack_code"),
+    [
+        (RoleCode.BACKEND_DEVELOPER, "django-drf"),
+        (RoleCode.FRONTEND_DEVELOPER, "react-typescript-vite"),
+        (RoleCode.PRODUCT_DESIGNER, None),
+    ],
+)
+def test_helpdesk_detail_exposes_canonical_role_and_shared_content(
+    api_client,
+    helpdesk_template,
+    role_code,
+    stack_code,
+):
+    role = Role.objects.get(code=role_code)
+    stack = (
+        TechnologyStack.objects.get(code=stack_code)
+        if stack_code is not None
+        else None
+    )
+    session = api_client.session
+    session["participation_context"] = {
+        "selected_project_id": str(helpdesk_template.id),
+        "selected_role_id": str(role.id),
+        "selected_stack_id": str(stack.id) if stack is not None else None,
+    }
+    session.save()
+
+    response = api_client.get(f"/api/v1/projects/{helpdesk_template.id}/")
+
+    assert response.status_code == 200
+    version = response.data["published_version"]
+    role_items = version["role_context"]["work_items"]
+    shared_items = version["shared_work_items"]
+    assert len(role_items) == 36
+    assert len(shared_items) == 18
+    assert all(item["role"]["code"] == role_code for item in role_items)
+    assert all(item["technology_stack"] is None for item in role_items)
+    assert all(item["role"] is None for item in shared_items)
+    assert all(item["technology_stack"] is None for item in shared_items)
+    assert Counter(
+        item["sprint_template"]["sequence"] for item in role_items
+    ) == {sequence: 6 for sequence in range(1, 7)}
+    assert Counter(
+        item["sprint_template"]["sequence"] for item in shared_items
+    ) == {sequence: 3 for sequence in range(1, 7)}
+    assert [(item["position"], item["id"]) for item in role_items] == sorted(
+        (item["position"], item["id"]) for item in role_items
+    )
+    assert [(item["position"], item["id"]) for item in shared_items] == sorted(
+        (item["position"], item["id"]) for item in shared_items
+    )
 
 
 def test_project_detail_exposes_relative_sprint_schedule_and_work_relation(
     api_client, helpdesk_template, helpdesk_version
 ):
-    second = SprintTemplate.objects.create(
-        project_version=helpdesk_version,
-        sequence=2,
-        title="Second sprint",
-        brief="Second brief",
-        planned_start_offset_days=9,
-        planned_duration_days=4,
-    )
-    first = SprintTemplate.objects.create(
-        project_version=helpdesk_version,
-        sequence=1,
-        title="First sprint",
-        brief="First brief",
-        planned_start_offset_days=0,
-        planned_duration_days=5,
-    )
-    work_item = helpdesk_version.work_items.order_by("position").first()
-    work_item.sprint_template = first
-    work_item.save(update_fields=["sprint_template"])
+    first = helpdesk_version.sprint_templates.get(sequence=1)
+    work_item = first.work_items.filter(
+        role__isnull=True,
+        technology_stack__isnull=True,
+    ).order_by("position", "id").first()
 
     response = api_client.get(f"/api/v1/projects/{helpdesk_template.id}/")
 
     sprints = response.data["published_version"]["sprint_templates"]
-    assert [item["sequence"] for item in sprints] == [1, 2]
-    assert sprints[0]["planned_end_offset_days"] == 5
-    assert sprints[1]["planned_end_offset_days"] == 13
+    assert [item["sequence"] for item in sprints] == [1, 2, 3, 4, 5, 6]
+    assert [item["planned_end_offset_days"] for item in sprints] == [
+        7,
+        14,
+        21,
+        28,
+        35,
+        42,
+    ]
     serialized_work = next(
         item
         for item in response.data["published_version"]["shared_work_items"]
@@ -83,7 +138,7 @@ def test_project_detail_exposes_relative_sprint_schedule_and_work_relation(
     assert serialized_work["sprint_template"] == {
         "id": str(first.id),
         "sequence": 1,
-        "title": "First sprint",
+        "title": "Product Foundation & Authentication",
     }
 
 
@@ -167,6 +222,14 @@ def test_role_and_stack_specific_work_content_is_filtered(
         position=101,
         title="Django-specific work",
     )
+    aspnet_stack = TechnologyStack.objects.get(code="aspnet-core-ef-core")
+    ProjectTaskTemplate.objects.create(
+        project_version=helpdesk_version,
+        role=backend_role,
+        technology_stack=aspnet_stack,
+        position=102,
+        title="ASP.NET-specific work",
+    )
     session = api_client.session
     session["participation_context"] = {
         "selected_project_id": str(helpdesk_template.id),
@@ -184,14 +247,31 @@ def test_role_and_stack_specific_work_content_is_filtered(
     }
     assert "Backend shared-stack work" in titles
     assert "Django-specific work" in titles
+    assert "ASP.NET-specific work" not in titles
     shared_items = response.data["published_version"]["shared_work_items"]
-    assert len(shared_items) == 16
+    assert len(shared_items) == 18
     assert {item["id"] for item in role_items}.isdisjoint(
         {item["id"] for item in shared_items}
     )
     assert response.data["published_version"]["role_context"]["selected_stack"][
         "code"
     ] == "django-drf"
+
+    session = api_client.session
+    participation_context = session["participation_context"]
+    participation_context["selected_stack_id"] = str(aspnet_stack.id)
+    session["participation_context"] = participation_context
+    session.save()
+    aspnet_response = api_client.get(f"/api/v1/projects/{helpdesk_template.id}/")
+    aspnet_titles = {
+        item["title"]
+        for item in aspnet_response.data["published_version"]["role_context"][
+            "work_items"
+        ]
+    }
+    assert "Backend shared-stack work" in aspnet_titles
+    assert "ASP.NET-specific work" in aspnet_titles
+    assert "Django-specific work" not in aspnet_titles
 
 
 def test_invalid_stack_configuration_returns_safe_api_error(
