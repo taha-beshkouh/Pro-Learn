@@ -6,21 +6,26 @@
 
 ## Current Workstream
 
-### Helpdesk Lite — Canonical Sprint Content Population
-Status: `READY TO IMPLEMENT`
+### Phase 10 — Platform Internal Django Admin / CRM
+Status: `IMPLEMENTATION COMPLETE - MANUAL POSTGRESQL VALIDATION PENDING`
 
 Current position:
-- MVP backend Phases 1–8 are validated.
-- The existing static Sprint-content architecture has been audited and verified as compatible with the accepted hybrid content architecture.
-- Helpdesk Lite Sprint 1–6 content structure and progression are finalized for the current Level 1 specification.
-- Canonical Helpdesk Sprint content has not yet been populated into the platform database in this workstream.
-- No current schema, API, caching, or media-infrastructure blocker is known.
+- MVP backend core lifecycle and Helpdesk Lite canonical Sprint content population are complete from the preceding workstreams.
+- All current MVP account/profile, project/content, formation, team, ProjectRun, SprintRun, Ready Check, and submission models now have an internal Django admin inspection surface.
+- Project definitions, participant profile data, historical snapshots, Ready Checks, Teams, and submission history are read-only through admin forms.
+- Sprint review transitions and overdue ProjectRun `INCOMPLETE` terminalization are exposed only through actions that call the existing validated services.
+- No schema, model, API, runtime-service, frontend, cache, or deferred-workflow change was introduced.
+
+Validation state:
+- safe import/compile and Django system checks are complete,
+- source-only admin registration/action checks are complete,
+- PostgreSQL-backed admin permission, immutability, and lifecycle-action tests are written,
+- developer-controlled focused and full-suite PostgreSQL validation is still required.
 
 Immediate goal:
-- populate the accepted Helpdesk Lite SprintTemplate/static work dataset through the existing project-data population mechanism,
-- preserve ProjectVersion isolation and existing visibility semantics,
-- add/retain only focused regression/data coverage that is actually required,
-- perform developer-controlled PostgreSQL validation after the population implementation is ready.
+- run the focused Phase 10 admin tests against PostgreSQL,
+- run the full suite,
+- report the developer results before marking Phase 10 `VALIDATED`.
 
 ---
 
@@ -324,51 +329,28 @@ Verify them when relevant.
 
 ## Immediate Next Action
 
-Proceed with Helpdesk Lite canonical Sprint-content population.
+Validate the Phase 10 internal Django admin implementation against PostgreSQL.
 
-Required implementation sequence:
-1. Read `PROJECT_RULES.md` and this `CURRENT_STATE.md`.
-2. Inspect the existing Helpdesk ProjectVersion, SprintTemplate rows, ProjectTaskTemplate/static-work model, serializers/selectors, tests, and the repository's existing seed/data-population mechanism.
-3. Reuse the existing population mechanism; do not create a second competing mechanism without a demonstrated blocker.
-4. Populate the exact supplied canonical Helpdesk Sprint 1–6 dataset.
-5. Do not invent, rename, redistribute, summarize, or rewrite accepted Sprint/work-item content.
-6. Do not create duplicate SprintTemplates or work items if the current ProjectVersion already contains relevant rows; handle existing data deliberately and report conflicts before destructive replacement.
-7. Preserve existing semantics:
-   - shared: `role = NULL`, `technology_stack = NULL`
-   - generic role-specific: role set, `technology_stack = NULL`
-   - deterministic `position` ordering
-   - exact ProjectVersion association
-8. No schema/model/API/lifecycle/cache/media change is expected. If the current architecture cannot represent the supplied dataset, stop and report the exact blocker before changing architecture.
-9. Add/update only focused data/API/regression coverage needed to prove the populated content is complete, isolated, ordered, and visible correctly.
-10. Stop before writing to the real `platform_db`; provide exact developer-run PostgreSQL population/migration/validation commands according to `PROJECT_RULES.md`.
-11. After developer validation, run/confirm the final full suite and then update this file again.
-
-Expected content validation should prove at minimum:
-- exactly six Helpdesk Sprints for the target ProjectVersion
-- sequences `1..6`
-- accepted titles, briefs, offsets, and seven-day durations
-- role-specific content exists for all three platform roles in every Sprint
-- shared content exists in every Sprint
-- stable positions/order
-- no cross-role or cross-stack leakage
-- no cross-ProjectVersion leakage
-- no project-slug/name hard-coding introduced
+Required validation sequence:
+1. Run Django `check` and `makemigrations --check --dry-run`.
+2. Run the focused admin tests in `tests/formations/test_admin.py`.
+3. Run the existing formation lifecycle/service tests together with the new admin adapter tests.
+4. Run the full suite.
+5. Report the exact developer results before changing Phase 10 from manual-validation-pending to `VALIDATED`.
 
 ---
 
 ## Current Known Blockers
 
-- No implementation blocker is currently known for Helpdesk Sprint content population.
-- Future media references are not a blocker.
-- A generic definition-completeness gate is not a blocker.
-- Caching is not a blocker and is not currently justified.
+- No Phase 10 implementation blocker is known.
+- PostgreSQL-backed admin security and lifecycle-action validation is pending developer execution.
+- TeamFormation creation, Ready Check replacement, and opening a Sprint remain available through their existing validated staff APIs rather than unsafe or input-incomplete bulk admin actions.
 
 ---
 
-## Remaining MVP Work After Helpdesk Content Population
+## Remaining MVP Work After Phase 10 Validation
 
 Expected remaining workstreams include:
-- platform internal Django CRM/Admin completion/audit for Facilitator operations that are actually required by the MVP
 - participant-facing frontend MVP
 - final end-to-end/manual MVP acceptance testing and bug fixes
 
@@ -415,3 +397,478 @@ Update this file after meaningful state transitions, especially:
 - a real blocker appears or is resolved
 
 Do not add long-term product rules here. Put those in `PROJECT_RULES.md`.
+
+We are starting the next backend phase.
+
+# Phase 10 — Platform Internal Django Admin / CRM
+
+IMPORTANT CONTEXT:
+
+The previous phases completed the backend MVP core lifecycle and Helpdesk L1 canonical content population.
+
+This phase is NOT participant frontend work.
+
+This phase is NOT the Admin UI inside the Helpdesk participant project.
+
+This phase is an internal operational Django Admin / lightweight CRM layer for platform staff/facilitator operations.
+
+The goal is to make the existing backend operationally manageable through Django's staff/admin interface without bypassing product rules, service-layer validation, database constraints, transactions, or permissions.
+
+Do NOT build a large custom CRM product.
+
+Do NOT implement public frontend.
+
+Do NOT implement Helpdesk product Admin UI.
+
+Do NOT add speculative models or workflows.
+
+============================================================
+0. READ AUTHORITATIVE SOURCES FIRST
+============================================================
+
+Before changing any code, re-read the CURRENT repository versions of:
+
+1. PROJECT_RULES.md
+2. CURRENT_STATE.md
+
+Do not rely on memory from previous phases.
+
+Treat:
+- PROJECT_RULES.md as the product/domain/architecture source of truth.
+- CURRENT_STATE.md as the implementation and validation source of truth.
+
+Also inspect the existing codebase, especially:
+
+- existing Django admin registrations
+- accounts/users/profiles admin
+- projects admin
+- formations admin
+- ProjectTemplate / ProjectVersion
+- SprintTemplate / ProjectTaskTemplate
+- TeamFormation / Ready Check
+- Team / TeamMember
+- ProjectRun
+- SprintRun
+- Sprint submission/review models
+- existing services/selectors
+- existing permission/service-layer patterns
+- existing tests
+
+If PROJECT_RULES.md appears to prohibit a requested item, distinguish carefully between:
+
+- Helpdesk participant-project Admin UI — OUT OF SCOPE
+- Platform internal Django staff/admin operations — THIS PHASE
+
+If a real contradiction remains, stop that specific implementation item and report it instead of inventing a rule.
+
+============================================================
+1. PHASE GOAL
+============================================================
+
+Implement a minimal, safe, staff-only internal Django Admin / CRM layer that lets the platform operator inspect and manage the MVP operational backend.
+
+The admin should support real operational needs for:
+
+- viewing users/profiles/roles/skills where relevant
+- viewing project catalog/version/static content
+- viewing Helpdesk L1 Sprint content
+- managing manual Team Formation / Ready Check operational state if existing backend rules support it
+- viewing Teams and TeamMembers
+- viewing ProjectRuns
+- viewing SprintRuns
+- viewing submissions / review history
+- performing already-accepted staff/facilitator transitions through existing service-layer logic where appropriate
+
+The key principle:
+
+Django admin may expose operational controls, but it must not become a second source of business logic.
+
+All meaningful state-changing admin actions must call existing application services or reuse the same validated domain logic.
+
+Do NOT directly mutate lifecycle fields in ModelAdmin methods if that bypasses:
+- authorization rules
+- transaction.atomic
+- select_for_update
+- terminal-state guards
+- deadline enforcement
+- ProjectVersion immutability
+- TeamFormation/Ready Check constraints
+- Sprint Runtime service rules
+
+============================================================
+2. HARD SCOPE LIMITS
+============================================================
+
+Do NOT implement:
+
+- participant frontend
+- custom React/Vue frontend
+- Helpdesk product Admin UI
+- internal notes
+- matching algorithm
+- Candidate Pool
+- Extension
+- Trust
+- warnings/removal disciplinary workflow
+- replacement/recovery
+- AI review
+- GitHub automation
+- built-in chat
+- runtime task system
+- custom CMS/media system
+- dashboard analytics platform
+- Redis/cache layer
+- Celery/background jobs
+- broad audit/event framework
+- new generic permission architecture
+- new Facilitator model/role
+- new workflow states
+- schema changes unless a real admin blocker absolutely requires one
+
+Do NOT redesign models or services.
+
+Prefer Django `ModelAdmin`, list displays, filters, search, readonly fields, inline displays, and carefully controlled admin actions.
+
+============================================================
+3. ADMIN COVERAGE AUDIT
+============================================================
+
+First inspect what admin registrations already exist.
+
+Report before implementation:
+
+1. Which models are already registered in Django admin.
+2. Which important MVP operational models are missing.
+3. Which registered admin classes are too weak for operational use.
+4. Which admin actions already exist.
+5. Which state-changing actions can safely be exposed through existing services.
+6. Which actions should remain read-only because no safe service exists yet.
+
+Do not create admin actions for operations unless there is a safe service-layer path.
+
+============================================================
+4. ADMIN UX REQUIREMENTS — MINIMAL BUT USEFUL
+============================================================
+
+For relevant models, improve Django admin using minimal built-in admin features.
+
+Use appropriate:
+
+- `list_display`
+- `list_filter`
+- `search_fields`
+- `readonly_fields`
+- `ordering`
+- `date_hierarchy` if useful
+- `list_select_related`
+- simple inlines only when useful and not risky
+- safe links to related objects if existing patterns support it
+
+Focus on staff/facilitator efficiency.
+
+Avoid decorative admin customization.
+
+Avoid custom templates unless there is a strong operational reason.
+
+============================================================
+5. MODELS TO REVIEW FOR ADMIN REGISTRATION
+============================================================
+
+Inspect actual model names before coding. Do not assume names.
+
+At minimum review admin coverage for these conceptual areas:
+
+## Accounts / Profiles
+- User account model, if custom
+- Profile
+- Role
+- TechnologyStack / UserSkill equivalents
+
+Goal:
+Staff can inspect users, current selected role/stack data, and relevant profile info.
+
+Avoid allowing casual edits that could corrupt historical snapshots.
+
+## Projects / Content
+- Level
+- ProjectTemplate
+- ProjectVersion
+- ProjectRoleRequirement
+- allowed stacks/prerequisites if separate models
+- SprintTemplate
+- ProjectTaskTemplate
+
+Goal:
+Staff can inspect project definitions and canonical Helpdesk content.
+
+Respect ProjectVersion immutability once referenced.
+
+If project definition models are editable through admin while unreferenced, that is acceptable only if existing rules allow it.
+
+If referenced, admin must not bypass database triggers/immutability.
+
+Prefer read-only for risky versioned content unless current architecture safely supports edits.
+
+## Formation / Ready Check
+- TeamFormation
+- Ready Check / ReadyCheckMember equivalents
+- proposed members / slots
+
+Goal:
+Staff can inspect manual formation state and Ready Check status.
+
+If current services support staff-created formation, admin may expose the minimum safe create/view tooling.
+
+If not, keep creation out of admin and report the gap.
+
+Do not invent matching/candidate-pool behavior.
+
+## Team / ProjectRun
+- Team
+- TeamMember
+- ProjectRun
+
+Goal:
+Staff can inspect active/terminal runs, team members, role/stack snapshots, deadlines, state, and related SprintRuns.
+
+Do not let admin mutate terminal state directly except through safe service-layer actions.
+
+## Sprint Runtime / Review
+- SprintRun
+- submission / review / history models
+
+Goal:
+Staff can inspect Sprint state, submission state/history, designated submitter, deadlines, and review status.
+
+Admin may expose staff actions only if they call the existing services safely.
+
+Potential actions to inspect for safe exposure:
+- open next Sprint
+- mark submitted Sprint under review
+- request changes
+- complete Sprint
+- mark ProjectRun INCOMPLETE
+
+Only implement an admin action if:
+- the product rule exists,
+- the service already exists or can be minimally reused without duplicating domain logic,
+- the action enforces staff-only access,
+- the action preserves transaction/locking behavior,
+- tests can cover it.
+
+If any action lacks a safe service path, report it instead of implementing unsafe direct mutation.
+
+============================================================
+6. STATE-CHANGING ADMIN ACTION RULES
+============================================================
+
+Any state-changing admin action must follow these rules:
+
+- only staff/admin can execute it
+- call existing service-layer functions wherever possible
+- do not duplicate state transition logic inside admin.py
+- do not bypass `transaction.atomic`
+- do not bypass `select_for_update`
+- do not bypass terminal guards
+- do not bypass deadline guards
+- do not bypass designated submitter or participant rules where relevant
+- do not mutate historical snapshots
+- do not alter append-only submission history
+- do not change ProjectVersion definitions once referenced
+- show clear success/error admin messages
+- handle validation/domain errors gracefully
+- fail closed, not open
+
+Admin should be an operational surface over the same backend rules, not a privileged loophole.
+
+============================================================
+7. PROJECTVERSION / CONTENT IMMUTABILITY
+============================================================
+
+Be very careful with admin edit permissions for:
+
+- ProjectVersion
+- SprintTemplate
+- ProjectTaskTemplate
+- role requirements
+- allowed stacks
+- prerequisites
+
+Phase 8 introduced/validated immutability for referenced ProjectVersion definitions.
+
+Admin must respect that.
+
+If the database already enforces immutability through triggers, do not try to bypass them.
+
+Optionally improve admin readability by showing referenced/immutable status if it can be computed safely and cheaply.
+
+Do not add speculative fields just for this.
+
+If preventing edits in admin requires too much new code, prefer readonly admin behavior for versioned content.
+
+============================================================
+8. SECURITY REQUIREMENTS
+============================================================
+
+Write tests proving:
+
+- non-staff users cannot access admin
+- staff users can access relevant admin pages
+- state-changing admin actions reject non-staff users
+- admin actions call safe rules and do not bypass service-layer validation
+- forbidden transitions remain forbidden through admin
+- terminal ProjectRuns remain protected
+- ProjectVersion immutability cannot be bypassed through admin
+- project content cannot be corrupted through admin editing
+
+Do not rely on Django admin default behavior alone for custom actions.
+
+If using only standard Django admin views with no custom action, minimal access tests may be enough.
+
+If adding actions, write focused tests for each action.
+
+============================================================
+9. ADMIN PERFORMANCE / QUERY SANITY
+============================================================
+
+Use `list_select_related` or queryset optimization where obvious and useful.
+
+Do not add caching.
+
+Do not add complex query frameworks.
+
+Avoid admin pages that accidentally perform severe N+1 queries for common list views.
+
+If a model has heavy relations, keep list_display modest.
+
+============================================================
+10. EXPECTED IMPLEMENTATION STYLE
+============================================================
+
+This phase should mostly modify/add:
+
+- `admin.py` files
+- admin tests
+- maybe small service wrappers only if needed to reuse existing logic cleanly
+
+It should usually NOT modify:
+
+- models
+- migrations
+- API serializers
+- API views
+- runtime services
+- selectors
+- canonical Helpdesk content
+- PROJECT_RULES.md
+- frontend
+
+If you believe a non-admin file must change, explain exactly why and keep it minimal.
+
+No schema migration is expected for this phase unless you find a real blocker.
+
+============================================================
+11. TESTING
+============================================================
+
+Add focused tests for admin registration, permissions, and any custom admin action.
+
+Relevant test types may include:
+
+- `admin_client` access tests
+- staff vs non-staff admin access
+- ModelAdmin changelist/detail availability
+- readonly field behavior where important
+- admin action success path
+- admin action invalid transition path
+- admin action permission rejection
+- admin action service-layer consistency
+
+Do not over-test Django built-in behavior.
+
+Test custom behavior and security boundaries.
+
+Use existing fixture/helper patterns.
+
+Do not create invalid database states.
+
+Do not weaken constraints to make admin tests pass.
+
+============================================================
+12. DATABASE / MIGRATION BOUNDARY
+============================================================
+
+Follow PROJECT_RULES.md exactly.
+
+You must NOT:
+
+- connect to my real PostgreSQL database
+- apply migrations
+- create disposable PostgreSQL
+- inspect `.env`
+- use real credentials
+
+If no migration is required, say explicitly:
+
+No migration required.
+
+If a migration is somehow required, justify it and create only the migration source file, then stop before DB execution.
+
+Run only safe non-database checks yourself.
+
+PostgreSQL-dependent tests must be written but reported as:
+
+WRITTEN - MANUAL POSTGRESQL VALIDATION REQUIRED
+
+unless I execute them and report success.
+
+============================================================
+13. CURRENT_STATE.md
+============================================================
+
+Do not mark Phase 10 as validated.
+
+Update CURRENT_STATE.md only according to the established workflow.
+
+If implementation is complete but PostgreSQL/manual validation is pending, state that truthfully.
+
+Do not write MANUALLY VERIFIED unless I explicitly report successful validation.
+
+============================================================
+14. COMPLETION REPORT
+============================================================
+
+At the end, report with this exact title:
+
+# PHASE 10 PLATFORM INTERNAL DJANGO ADMIN / CRM REPORT
+
+Include:
+
+1. SOURCES READ
+2. EXISTING ADMIN COVERAGE FOUND
+3. ADMIN COVERAGE ADDED
+4. ADMIN ACTIONS ADDED
+5. ADMIN ACTIONS DELIBERATELY NOT ADDED
+6. SERVICE-LAYER REUSE / SAFETY
+7. AUTHORIZATION / SECURITY DECISIONS
+8. PROJECTVERSION IMMUTABILITY HANDLING
+9. FILES CHANGED
+10. FILES CREATED
+11. MIGRATIONS CREATED OR CONFIRMATION NONE REQUIRED
+12. TESTS ADDED OR UPDATED
+13. SAFE CHECKS EXECUTED BY CODEX
+14. POSTGRESQL VALIDATION REQUIRED
+15. EXACT COMMANDS FOR DEVELOPER TO RUN
+16. KNOWN REMAINING ADMIN/CRM GAPS
+17. NEXT STEP AFTER SUCCESSFUL VALIDATION
+
+Also explicitly confirm:
+
+- no frontend was implemented
+- no Helpdesk product Admin UI was implemented
+- no new Facilitator model/role was introduced
+- no Extension/Matching/Trust/deferred workflow was implemented
+- no ProjectVersion immutability bypass was introduced
+- no lifecycle rule was duplicated unsafely in admin
+
+Do not claim full validation until I provide PostgreSQL/manual test results.
