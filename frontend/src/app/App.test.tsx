@@ -20,13 +20,55 @@ describe('app router', () => {
     vi.unstubAllGlobals()
   })
 
-  it('renders the public home placeholder', async () => {
+  it('renders the public homepage content and calls to action', async () => {
     const router = createMemoryRouter(appRoutes, { initialEntries: ['/'] })
 
     render(<App router={router} />)
 
-    expect(screen.getByRole('heading', { name: 'Home' })).toBeInTheDocument()
+    expect(screen.getAllByText('PROLEARN').length).toBeGreaterThan(0)
+    expect(
+      screen.getByRole('heading', { level: 1, name: /کشف کن/ }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getAllByRole('link', { name: 'دیدن پروژه‌ها' }).length,
+    ).toBeGreaterThan(0)
+    expect(
+      screen.getByText('مسیر تبدیل مهارت به تجربه واقعی از اینجا شروع می‌شود'),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('heading', { name: 'نقشه راه پلتفرم' }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('heading', { name: 'پیش‌نمایش مسیرهای پروژه' }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('heading', { name: 'سوالات متداول درباره پلتفرم' }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('heading', { name: 'پروژه بعدیت رو تنها نساز' }),
+    ).toBeInTheDocument()
+    for (const role of [
+      'Back-end developer',
+      'Front-end developer',
+      'Product Designer',
+    ]) {
+      expect(screen.getByRole('heading', { name: role })).toBeInTheDocument()
+    }
     await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1))
+  })
+
+  it.each([
+    ['/login', 'Login'],
+    ['/register', 'Register'],
+    ['/projects', 'Project catalog'],
+    ['/projects/some-version', 'Project detail'],
+  ])('preserves the public placeholder at %s', async (path, heading) => {
+    const router = createMemoryRouter(appRoutes, { initialEntries: [path] })
+
+    render(<App router={router} />)
+
+    expect(screen.getByRole('heading', { name: heading })).toBeInTheDocument()
+    expect(router.state.location.pathname).toBe(path)
   })
 
   it.each([
