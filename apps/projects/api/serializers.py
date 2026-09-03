@@ -39,6 +39,15 @@ class ProjectListSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class ProjectTemplateIdentitySerializer(serializers.ModelSerializer):
+    level = LevelSerializer(read_only=True)
+
+    class Meta:
+        model = ProjectTemplate
+        fields = ("id", "slug", "name", "level")
+        read_only_fields = fields
+
+
 class PrerequisiteSerializer(serializers.ModelSerializer):
     class Meta:
         model = RolePrerequisite
@@ -158,6 +167,29 @@ class RoleContextSerializer(serializers.ModelSerializer):
         return WorkItemSerializer(items, many=True).data
 
 
+class ProjectRoleRequirementDefinitionSerializer(serializers.ModelSerializer):
+    role = RoleSerializer(read_only=True)
+    configured_stacks = serializers.SerializerMethodField()
+    prerequisites = PrerequisiteSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = ProjectRoleRequirement
+        fields = (
+            "id",
+            "role",
+            "requires_stack",
+            "stack_policy",
+            "context",
+            "configured_stacks",
+            "prerequisites",
+        )
+        read_only_fields = fields
+
+    def get_configured_stacks(self, obj):
+        stacks = [allowance.technology_stack for allowance in obj.allowed_stacks.all()]
+        return TechnologyStackSerializer(stacks, many=True).data
+
+
 class ProjectVersionSerializer(serializers.ModelSerializer):
     role_context = serializers.SerializerMethodField()
     shared_work_items = serializers.SerializerMethodField()
@@ -213,3 +245,32 @@ class ProjectDetailSerializer(ProjectListSerializer):
         if version is None:
             return None
         return ProjectVersionSerializer(version, context=self.context).data
+
+
+class ProjectVersionDetailSerializer(ProjectVersionSerializer):
+    project_template = ProjectTemplateIdentitySerializer(read_only=True)
+    role_requirements = ProjectRoleRequirementDefinitionSerializer(
+        many=True,
+        read_only=True,
+    )
+    work_items = WorkItemSerializer(many=True, read_only=True)
+
+    class Meta(ProjectVersionSerializer.Meta):
+        fields = (
+            "project_template",
+            "id",
+            "version_number",
+            "summary",
+            "duration_weeks",
+            "sprint_count",
+            "weekly_effort_hours_min",
+            "weekly_effort_hours_max",
+            "participant_database",
+            "published_at",
+            "sprint_templates",
+            "role_requirements",
+            "work_items",
+            "role_context",
+            "shared_work_items",
+        )
+        read_only_fields = fields

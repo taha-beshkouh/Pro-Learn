@@ -1,10 +1,18 @@
 from collections import Counter
 
 import pytest
+from django.utils import timezone
 
 from apps.profiles.models import Role, RoleCode, TechnologyStack
 from apps.projects.exceptions import ProjectConfigurationError
-from apps.projects.models import ProjectTaskTemplate
+from apps.projects.models import (
+    ProjectRoleRequirement,
+    ProjectTaskTemplate,
+    ProjectVersion,
+    RolePrerequisite,
+    SprintTemplate,
+    StackPolicy,
+)
 
 
 pytestmark = pytest.mark.django_db
@@ -151,6 +159,216 @@ def test_unfinalized_project_does_not_invent_a_version(api_client):
     assert response.status_code == 200
     assert response.data["published_version_id"] is None
     assert response.data["published_version"] is None
+
+
+def test_exact_version_detail_does_not_substitute_latest_published_version(
+    api_client,
+    helpdesk_template,
+    helpdesk_version,
+):
+    newer_version = ProjectVersion.objects.create(
+        project_template=helpdesk_template,
+        version_number=2,
+        summary="Newer version",
+        published_at=timezone.now(),
+    )
+
+    response = api_client.get(f"/api/v1/project-versions/{helpdesk_version.id}/")
+    template_response = api_client.get(f"/api/v1/projects/{helpdesk_template.id}/")
+
+    assert response.status_code == 200
+    assert response.data["id"] == str(helpdesk_version.id)
+    assert response.data["version_number"] == 1
+    assert response.data["project_template"] == {
+        "id": str(helpdesk_template.id),
+        "slug": helpdesk_template.slug,
+        "name": helpdesk_template.name,
+        "level": {
+            "id": str(helpdesk_template.level.id),
+            "number": helpdesk_template.level.number,
+            "name": helpdesk_template.level.name,
+        },
+    }
+    assert response.data["published_at"] is not None
+    assert template_response.data["published_version"]["id"] == str(newer_version.id)
+
+
+def test_exact_version_detail_exposes_complete_isolated_ordered_definition(
+    api_client,
+    helpdesk_template,
+    helpdesk_version,
+    backend_role,
+    designer_role,
+    django_stack,
+):
+    backend_requirement = helpdesk_version.role_requirements.get(role=backend_role)
+    second_prerequisite = RolePrerequisite.objects.create(
+        role_requirement=backend_requirement,
+        position=2,
+        title="Second prerequisite",
+    )
+    first_prerequisite = RolePrerequisite.objects.create(
+        role_requirement=backend_requirement,
+        position=1,
+        title="First prerequisite",
+    )
+    newer_version = ProjectVersion.objects.create(
+        project_template=helpdesk_template,
+        version_number=2,
+        sprint_count=1,
+        published_at=timezone.now(),
+    )
+    newer_sprint = SprintTemplate.objects.create(
+        project_version=newer_version,
+        sequence=1,
+        title="Version 2 Sprint",
+        planned_start_offset_days=0,
+        planned_duration_days=7,
+    )
+    newer_requirement = ProjectRoleRequirement.objects.create(
+        project_version=newer_version,
+        role=designer_role,
+        requires_stack=False,
+        stack_policy=None,
+        context="Version 2 role context",
+    )
+    newer_prerequisite = RolePrerequisite.objects.create(
+        role_requirement=newer_requirement,
+        position=1,
+        title="Version 2 prerequisite",
+    )
+    newer_work_item = ProjectTaskTemplate.objects.create(
+        project_version=newer_version,
+        sprint_template=newer_sprint,
+        position=1,
+        title="Version 2 work item",
+    )
+    session = api_client.session
+    session["participation_context"] = {
+        "selected_project_id": str(helpdesk_template.id),
+        "selected_role_id": str(backend_role.id),
+        "selected_stack_id": str(django_stack.id),
+    }
+    session.save()
+
+    response = api_client.get(f"/api/v1/project-versions/{helpdesk_version.id}/")
+
+    assert response.status_code == 200
+    data = response.data
+    assert data["id"] == str(helpdesk_version.id)
+    assert [sprint["sequence"] for sprint in data["sprint_templates"]] == [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+    ]
+    assert str(newer_sprint.id) not in {
+        sprint["id"] for sprint in data["sprint_templates"]
+    }
+
+    requirements = data["role_requirements"]
+    assert [(item["role"]["name"], item["id"]) for item in requirements] == sorted(
+        (item["role"]["name"], item["id"]) for item in requirements
+    )
+    assert {item["role"]["code"] for item in requirements} == set(RoleCode.values)
+    assert str(newer_requirement.id) not in {item["id"] for item in requirements}
+    requirements_by_role = {item["role"]["code"]: item for item in requirements}
+    backend_definition = requirements_by_role[RoleCode.BACKEND_DEVELOPER]
+    assert backend_definition["stack_policy"] == "ALLOWLIST"
+    assert {
+        stack["code"] for stack in backend_definition["configured_stacks"]
+    } == {"aspnet-core-ef-core", "django-drf"}
+    assert [
+        stack["name"] for stack in backend_definition["configured_stacks"]
+    ] == sorted(stack["name"] for stack in backend_definition["configured_stacks"])
+    assert [
+        item["id"] for item in backend_definition["prerequisites"]
+    ] == [str(first_prerequisite.id), str(second_prerequisite.id)]
+    assert str(newer_prerequisite.id) not in {
+        item["id"]
+        for requirement in requirements
+        for item in requirement["prerequisites"]
+    }
+    assert requirements_by_role[RoleCode.PRODUCT_DESIGNER][
+        "configured_stacks"
+    ] == []
+    frontend_definition = requirements_by_role[RoleCode.FRONTEND_DEVELOPER]
+    assert frontend_definition["stack_policy"] == "FIXED"
+    assert [
+        stack["code"] for stack in frontend_definition["configured_stacks"]
+    ] == ["react-typescript-vite"]
+
+    work_items = data["work_items"]
+    assert [(item["position"], item["id"]) for item in work_items] == sorted(
+        (item["position"], item["id"]) for item in work_items
+    )
+    assert str(newer_work_item.id) not in {item["id"] for item in work_items}
+    assert {item["role"]["code"] for item in work_items if item["role"]} == set(
+        RoleCode.values
+    )
+    assert any(item["role"] is None for item in work_items)
+    assert all(
+        item["sprint_template"] is None
+        or item["sprint_template"]["id"]
+        in {sprint["id"] for sprint in data["sprint_templates"]}
+        for item in work_items
+    )
+    assert data["role_context"]["role"]["code"] == RoleCode.BACKEND_DEVELOPER
+    assert data["role_context"]["selected_stack"]["id"] == str(django_stack.id)
+
+
+def test_exact_version_detail_does_not_expose_unpublished_version(
+    api_client,
+    helpdesk_template,
+):
+    draft = ProjectVersion.objects.create(
+        project_template=helpdesk_template,
+        version_number=2,
+    )
+
+    response = api_client.get(f"/api/v1/project-versions/{draft.id}/")
+
+    assert response.status_code == 404
+    assert response.data == {"detail": "Published project version not found."}
+
+
+def test_exact_version_detail_exposes_open_policy_without_invented_stacks(
+    api_client,
+    helpdesk_template,
+    backend_role,
+):
+    version = ProjectVersion.objects.create(
+        project_template=helpdesk_template,
+        version_number=2,
+        published_at=timezone.now(),
+    )
+    requirement = ProjectRoleRequirement.objects.create(
+        project_version=version,
+        role=backend_role,
+        requires_stack=True,
+        stack_policy=StackPolicy.OPEN,
+    )
+
+    response = api_client.get(f"/api/v1/project-versions/{version.id}/")
+
+    assert response.status_code == 200
+    assert response.data["role_requirements"] == [
+        {
+            "id": str(requirement.id),
+            "role": {
+                "id": str(backend_role.id),
+                "code": RoleCode.BACKEND_DEVELOPER,
+                "name": backend_role.name,
+            },
+            "requires_stack": True,
+            "stack_policy": StackPolicy.OPEN,
+            "context": "",
+            "configured_stacks": [],
+            "prerequisites": [],
+        }
+    ]
 
 
 def test_guest_role_context_uses_session_selection(

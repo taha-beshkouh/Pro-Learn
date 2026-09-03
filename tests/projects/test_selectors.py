@@ -1,6 +1,9 @@
 import pytest
 
-from apps.projects.api.serializers import ProjectDetailSerializer
+from apps.projects.api.serializers import (
+    ProjectDetailSerializer,
+    ProjectVersionDetailSerializer,
+)
 from apps.projects.selectors import (
     project_template_detail,
     published_project_version,
@@ -24,7 +27,16 @@ def test_detail_selector_and_serialization_have_bounded_queries(
                 "profile": None,
             },
         ).data
+        definition_data = ProjectVersionDetailSerializer(
+            version,
+            context={
+                "selected_role": backend_role,
+                "profile": None,
+            },
+        ).data
 
     assert data["published_version"]["role_context"]["role"]["code"] == (
         "BACKEND_DEVELOPER"
     )
+    assert len(definition_data["role_requirements"]) == 3
+    assert len(definition_data["work_items"]) == 126

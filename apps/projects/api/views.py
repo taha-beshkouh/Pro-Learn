@@ -11,6 +11,7 @@ from apps.projects.api.serializers import (
     ProjectDetailSerializer,
     ProjectListSerializer,
     ProjectStackSelectionInputSerializer,
+    ProjectVersionDetailSerializer,
 )
 from apps.projects.models import ProjectTemplate, ProjectVersion
 from apps.projects.exceptions import (
@@ -88,6 +89,38 @@ class ProjectDetailView(APIView):
                 project,
                 context={
                     "published_version": version,
+                    "selected_role": selected_role,
+                    "selected_stack": selected_stack,
+                    "profile": profile,
+                },
+            ).data
+        except ProjectConfigurationError as exc:
+            raise ProjectConfigurationUnavailable from exc
+        return Response(data)
+
+
+class ProjectVersionDetailView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request, project_version_id):
+        try:
+            version = published_project_version(version_id=project_version_id)
+        except ProjectVersion.DoesNotExist as exc:
+            raise NotFound("Published project version not found.") from exc
+
+        profile = profile_with_skills_for_request(request=request)
+        if request.user.is_authenticated:
+            selected_role = profile.selected_role if profile is not None else None
+        else:
+            selected_role = selected_role_for_request(request=request)
+        selected_stack = selected_stack_for_request(
+            request=request,
+            project_id=version.project_template_id,
+        )
+        try:
+            data = ProjectVersionDetailSerializer(
+                version,
+                context={
                     "selected_role": selected_role,
                     "selected_stack": selected_stack,
                     "profile": profile,

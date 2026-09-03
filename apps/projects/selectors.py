@@ -50,15 +50,19 @@ def project_template_detail(*, project_id: UUID) -> ProjectTemplate:
 def published_project_version(*, version_id: UUID) -> ProjectVersion:
     allowed_stacks = ProjectRoleAllowedStack.objects.select_related(
         "technology_stack"
-    ).order_by("technology_stack__name")
+    ).order_by("technology_stack__name", "id")
     prerequisites = RolePrerequisite.objects.order_by("position", "id")
     role_stack_links = RoleTechnologyStack.objects.select_related(
         "technology_stack"
-    ).order_by("technology_stack__name")
-    role_requirements = ProjectRoleRequirement.objects.select_related("role").prefetch_related(
-        Prefetch("allowed_stacks", queryset=allowed_stacks),
-        Prefetch("prerequisites", queryset=prerequisites),
-        Prefetch("role__compatible_stack_links", queryset=role_stack_links),
+    ).order_by("technology_stack__name", "id")
+    role_requirements = (
+        ProjectRoleRequirement.objects.select_related("role")
+        .prefetch_related(
+            Prefetch("allowed_stacks", queryset=allowed_stacks),
+            Prefetch("prerequisites", queryset=prerequisites),
+            Prefetch("role__compatible_stack_links", queryset=role_stack_links),
+        )
+        .order_by("role__name", "id")
     )
     work_items = ProjectTaskTemplate.objects.select_related(
         "role", "technology_stack", "sprint_template"
