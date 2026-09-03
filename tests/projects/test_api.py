@@ -166,10 +166,13 @@ def test_exact_version_detail_does_not_substitute_latest_published_version(
     helpdesk_template,
     helpdesk_version,
 ):
+    helpdesk_version.full_description = "Version 1 full description."
+    helpdesk_version.save(update_fields=["full_description"])
     newer_version = ProjectVersion.objects.create(
         project_template=helpdesk_template,
         version_number=2,
         summary="Newer version",
+        full_description="Version 2 full description.",
         published_at=timezone.now(),
     )
 
@@ -179,6 +182,8 @@ def test_exact_version_detail_does_not_substitute_latest_published_version(
     assert response.status_code == 200
     assert response.data["id"] == str(helpdesk_version.id)
     assert response.data["version_number"] == 1
+    assert response.data["full_description"] == "Version 1 full description."
+    assert response.data["full_description"] != newer_version.full_description
     assert response.data["project_template"] == {
         "id": str(helpdesk_template.id),
         "slug": helpdesk_template.slug,
@@ -191,6 +196,7 @@ def test_exact_version_detail_does_not_substitute_latest_published_version(
     }
     assert response.data["published_at"] is not None
     assert template_response.data["published_version"]["id"] == str(newer_version.id)
+    assert "full_description" not in template_response.data["published_version"]
 
 
 def test_exact_version_detail_exposes_complete_isolated_ordered_definition(

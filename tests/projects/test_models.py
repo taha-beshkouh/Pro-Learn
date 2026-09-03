@@ -52,6 +52,27 @@ def test_helpdesk_known_version_data_is_seeded(helpdesk_version):
     ).exists()
 
 
+def test_project_version_stores_full_description_and_defaults_to_empty(
+    helpdesk_template,
+):
+    described_version = ProjectVersion.objects.create(
+        project_template=helpdesk_template,
+        version_number=2,
+        full_description="Complete Version 2 project description.",
+    )
+    empty_version = ProjectVersion.objects.create(
+        project_template=helpdesk_template,
+        version_number=3,
+    )
+    described_version.refresh_from_db()
+    empty_version.refresh_from_db()
+
+    assert described_version.full_description == (
+        "Complete Version 2 project description."
+    )
+    assert empty_version.full_description == ""
+
+
 def test_helpdesk_role_stack_policies_are_seeded(helpdesk_version):
     requirements = {
         item.role.code: item

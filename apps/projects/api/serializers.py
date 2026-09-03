@@ -261,6 +261,7 @@ class ProjectVersionDetailSerializer(ProjectVersionSerializer):
             "id",
             "version_number",
             "summary",
+            "full_description",
             "duration_weeks",
             "sprint_count",
             "weekly_effort_hours_min",

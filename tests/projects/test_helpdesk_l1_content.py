@@ -17,7 +17,11 @@ from apps.projects.models import ProjectTaskTemplate, ProjectVersion, SprintTemp
 canonical_migration = import_module(
     "apps.projects.migrations.0006_populate_helpdesk_l1_canonical_content"
 )
+full_description_migration = import_module(
+    "apps.projects.migrations.0008_populate_helpdesk_l1_full_description"
+)
 CANONICAL_SPRINTS = canonical_migration.CANONICAL_SPRINTS
+APPROVED_FULL_DESCRIPTION = full_description_migration.APPROVED_FULL_DESCRIPTION
 
 
 @pytest.fixture
@@ -172,6 +176,13 @@ def test_canonical_yaml_checksum_matches_frozen_migration_source():
     assert canonical_yaml_data(yaml_path) == CANONICAL_SPRINTS
 
 
+def test_approved_helpdesk_full_description_checksum_is_frozen():
+    checksum = hashlib.sha256(APPROVED_FULL_DESCRIPTION.encode("utf-8")).hexdigest()
+    assert checksum.upper() == (
+        "20CBF81601EA0D158C228D61CE15FDEC1708FEE5B278D28ACDFC198FAD17D748"
+    )
+
+
 def test_frozen_canonical_dataset_has_the_approved_shape():
     assert len(CANONICAL_SPRINTS) == 6
     assert [sprint["sequence"] for sprint in CANONICAL_SPRINTS] == [1, 2, 3, 4, 5, 6]
@@ -193,6 +204,56 @@ def test_frozen_canonical_dataset_has_the_approved_shape():
 @pytest.mark.django_db
 @pytest.mark.postgresql
 class TestHelpdeskL1CanonicalDatabaseContent:
+    def test_full_description_population_is_exact_idempotent_and_version_isolated(
+        self,
+        api_client,
+        helpdesk_version,
+    ):
+        helpdesk_version.full_description = ""
+        helpdesk_version.save(update_fields=["full_description"])
+        another_version = ProjectVersion.objects.create(
+            project_template=helpdesk_version.project_template,
+            version_number=2,
+            full_description="Unrelated version description.",
+        )
+
+        full_description_migration.populate_helpdesk_l1_full_description(
+            django_apps,
+            SimpleNamespace(connection=connection),
+        )
+        full_description_migration.populate_helpdesk_l1_full_description(
+            django_apps,
+            SimpleNamespace(connection=connection),
+        )
+
+        helpdesk_version.refresh_from_db()
+        another_version.refresh_from_db()
+        response = api_client.get(
+            f"/api/v1/project-versions/{helpdesk_version.id}/"
+        )
+        assert helpdesk_version.full_description == APPROVED_FULL_DESCRIPTION
+        assert another_version.full_description == "Unrelated version description."
+        assert response.status_code == 200
+        assert response.data["full_description"] == APPROVED_FULL_DESCRIPTION
+
+    def test_full_description_population_rejects_referenced_empty_target(
+        self,
+        helpdesk_version,
+        valid_formation_reference,
+    ):
+        helpdesk_version.full_description = ""
+        helpdesk_version.save(update_fields=["full_description"])
+        valid_formation_reference(helpdesk_version)
+
+        with pytest.raises(RuntimeError, match="is referenced"):
+            full_description_migration.populate_helpdesk_l1_full_description(
+                django_apps,
+                SimpleNamespace(connection=connection),
+            )
+
+        helpdesk_version.refresh_from_db()
+        assert helpdesk_version.full_description == ""
+
     def test_target_project_version_and_sprints_are_exact(self, helpdesk_version):
         assert helpdesk_version.project_template.slug == "helpdesk-lite"
         assert helpdesk_version.project_template.level.number == 1

@@ -50,6 +50,7 @@ class ProjectVersion(models.Model):
     )
     version_number = models.PositiveIntegerField()
     summary = models.TextField(blank=True)
+    full_description = models.TextField(blank=True, default="")
     duration_weeks = models.PositiveSmallIntegerField(null=True, blank=True)
     sprint_count = models.PositiveSmallIntegerField(null=True, blank=True)
     weekly_effort_hours_min = models.PositiveSmallIntegerField(null=True, blank=True)
