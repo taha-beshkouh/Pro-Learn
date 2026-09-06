@@ -4,8 +4,8 @@ from apps.projects.api.views import (
     LevelListView,
     ProjectDetailView,
     ProjectListView,
-    ProjectStackSelectionView,
     ProjectVersionDetailView,
+    ProjectVersionStackSelectionView,
 )
 
 
@@ -21,8 +21,8 @@ urlpatterns = [
         name="project-version-detail",
     ),
     path(
-        "projects/<uuid:project_id>/stack-selection/",
-        ProjectStackSelectionView.as_view(),
-        name="project-stack-selection",
+        "project-versions/<uuid:project_version_id>/stack-selection/",
+        ProjectVersionStackSelectionView.as_view(),
+        name="project-version-stack-selection",
     ),
 ]

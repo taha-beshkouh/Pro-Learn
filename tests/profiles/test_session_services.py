@@ -15,27 +15,24 @@ class FakeSession(dict):
 
 def test_guest_context_is_serialized_without_database_objects():
     role_id = uuid.uuid4()
-    stack_id = uuid.uuid4()
-    project_id = uuid.uuid4()
+    project_version_id = uuid.uuid4()
     session = FakeSession()
 
     result = update_guest_context(
         session=session,
         changes={
             "selected_role": SimpleNamespace(pk=role_id),
-            "selected_stack": SimpleNamespace(pk=stack_id),
-            "selected_project_id": project_id,
+            "project_version_id": project_version_id,
             "intended_action": "join_project",
-            "return_path": "/projects",
+            "return_path": f"/projects/{project_version_id}/stack-selection",
         },
     )
 
     assert result == {
         "selected_role_id": str(role_id),
-        "selected_stack_id": str(stack_id),
-        "selected_project_id": str(project_id),
+        "project_version_id": str(project_version_id),
         "intended_action": "join_project",
-        "return_path": "/projects",
+        "return_path": f"/projects/{project_version_id}/stack-selection",
     }
     assert session[GUEST_CONTEXT_SESSION_KEY] == result
     assert session.modified is True
@@ -46,6 +43,8 @@ def test_guest_context_removes_null_values_and_filters_unknown_keys():
         {
             GUEST_CONTEXT_SESSION_KEY: {
                 "return_path": "/projects",
+                "selected_project_id": str(uuid.uuid4()),
+                "selected_stack_id": str(uuid.uuid4()),
                 "unexpected": "must-not-be-reflected",
             }
         }

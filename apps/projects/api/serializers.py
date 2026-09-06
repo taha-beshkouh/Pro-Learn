@@ -19,6 +19,8 @@ class ProjectStackSelectionInputSerializer(StrictFieldsSerializer):
     technology_stack_id = serializers.PrimaryKeyRelatedField(
         source="technology_stack",
         queryset=TechnologyStack.objects.all(),
+        allow_null=True,
+        required=False,
     )
 
 

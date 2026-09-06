@@ -3,10 +3,11 @@ from collections import Counter
 import pytest
 from django.utils import timezone
 
-from apps.profiles.models import Role, RoleCode, TechnologyStack
+from apps.profiles.models import Role, RoleCode, TechnologyStack, UserSkill
 from apps.projects.exceptions import ProjectConfigurationError
 from apps.projects.models import (
     ProjectRoleRequirement,
+    ProjectRoleAllowedStack,
     ProjectTaskTemplate,
     ProjectVersion,
     RolePrerequisite,
@@ -64,30 +65,22 @@ def test_helpdesk_detail_without_role_has_only_general_content(
 
 
 @pytest.mark.parametrize(
-    ("role_code", "stack_code"),
+    "role_code",
     [
-        (RoleCode.BACKEND_DEVELOPER, "django-drf"),
-        (RoleCode.FRONTEND_DEVELOPER, "react-typescript-vite"),
-        (RoleCode.PRODUCT_DESIGNER, None),
+        RoleCode.BACKEND_DEVELOPER,
+        RoleCode.FRONTEND_DEVELOPER,
+        RoleCode.PRODUCT_DESIGNER,
     ],
 )
 def test_helpdesk_detail_exposes_canonical_role_and_shared_content(
     api_client,
     helpdesk_template,
     role_code,
-    stack_code,
 ):
     role = Role.objects.get(code=role_code)
-    stack = (
-        TechnologyStack.objects.get(code=stack_code)
-        if stack_code is not None
-        else None
-    )
     session = api_client.session
     session["participation_context"] = {
-        "selected_project_id": str(helpdesk_template.id),
         "selected_role_id": str(role.id),
-        "selected_stack_id": str(stack.id) if stack is not None else None,
     }
     session.save()
 
@@ -205,7 +198,6 @@ def test_exact_version_detail_exposes_complete_isolated_ordered_definition(
     helpdesk_version,
     backend_role,
     designer_role,
-    django_stack,
 ):
     backend_requirement = helpdesk_version.role_requirements.get(role=backend_role)
     second_prerequisite = RolePrerequisite.objects.create(
@@ -251,9 +243,8 @@ def test_exact_version_detail_exposes_complete_isolated_ordered_definition(
     )
     session = api_client.session
     session["participation_context"] = {
-        "selected_project_id": str(helpdesk_template.id),
         "selected_role_id": str(backend_role.id),
-        "selected_stack_id": str(django_stack.id),
+        "project_version_id": str(helpdesk_version.id),
     }
     session.save()
 
@@ -322,7 +313,7 @@ def test_exact_version_detail_exposes_complete_isolated_ordered_definition(
         for item in work_items
     )
     assert data["role_context"]["role"]["code"] == RoleCode.BACKEND_DEVELOPER
-    assert data["role_context"]["selected_stack"]["id"] == str(django_stack.id)
+    assert data["role_context"]["selected_stack"] is None
 
 
 def test_exact_version_detail_does_not_expose_unpublished_version(
@@ -377,16 +368,21 @@ def test_exact_version_detail_exposes_open_policy_without_invented_stacks(
     ]
 
 
-def test_guest_role_context_uses_session_selection(
-    api_client, helpdesk_template, backend_role
+def test_guest_can_view_exact_version_stack_information_for_session_role(
+    api_client, helpdesk_version, backend_role
 ):
     session = api_client.session
-    session["participation_context"] = {"selected_role_id": str(backend_role.id)}
+    session["participation_context"] = {
+        "selected_role_id": str(backend_role.id),
+        "project_version_id": str(helpdesk_version.id),
+    }
     session.save()
 
-    response = api_client.get(f"/api/v1/projects/{helpdesk_template.id}/")
+    response = api_client.get(
+        f"/api/v1/project-versions/{helpdesk_version.id}/"
+    )
 
-    context = response.data["published_version"]["role_context"]
+    context = response.data["role_context"]
     assert context["role"]["code"] == RoleCode.BACKEND_DEVELOPER
     assert context["stack_policy"] == "ALLOWLIST"
     assert len(context["compatible_stacks"]) == 2
@@ -428,6 +424,8 @@ def test_authenticated_profile_role_overrides_guest_session(
 
 def test_role_and_stack_specific_work_content_is_filtered(
     api_client,
+    user,
+    profile,
     helpdesk_template,
     helpdesk_version,
     backend_role,
@@ -454,13 +452,15 @@ def test_role_and_stack_specific_work_content_is_filtered(
         position=102,
         title="ASP.NET-specific work",
     )
-    session = api_client.session
-    session["participation_context"] = {
-        "selected_project_id": str(helpdesk_template.id),
-        "selected_role_id": str(backend_role.id),
-        "selected_stack_id": str(django_stack.id),
-    }
-    session.save()
+    profile.selected_role = backend_role
+    profile.save(update_fields=["selected_role"])
+    api_client.force_login(user)
+    selection = api_client.post(
+        f"/api/v1/project-versions/{helpdesk_version.id}/stack-selection/",
+        {"technology_stack_id": str(django_stack.id)},
+        format="json",
+    )
+    assert selection.status_code == 200
 
     response = api_client.get(f"/api/v1/projects/{helpdesk_template.id}/")
 
@@ -481,11 +481,12 @@ def test_role_and_stack_specific_work_content_is_filtered(
         "code"
     ] == "django-drf"
 
-    session = api_client.session
-    participation_context = session["participation_context"]
-    participation_context["selected_stack_id"] = str(aspnet_stack.id)
-    session["participation_context"] = participation_context
-    session.save()
+    selection = api_client.post(
+        f"/api/v1/project-versions/{helpdesk_version.id}/stack-selection/",
+        {"technology_stack_id": str(aspnet_stack.id)},
+        format="json",
+    )
+    assert selection.status_code == 200
     aspnet_response = api_client.get(f"/api/v1/projects/{helpdesk_template.id}/")
     aspnet_titles = {
         item["title"]
@@ -522,26 +523,46 @@ def test_invalid_stack_configuration_returns_safe_api_error(
     assert "stack-policy" not in str(response.data)
 
 
-@pytest.mark.parametrize("authenticated", [False, True])
-def test_allowlist_stack_selection_is_consistent_for_anonymous_and_authenticated(
+def test_anonymous_stack_confirmation_is_rejected(
     api_client,
-    authenticated,
+    helpdesk_version,
+    backend_role,
+    django_stack,
+):
+    session = api_client.session
+    session["participation_context"] = {
+        "selected_role_id": str(backend_role.id),
+        "project_version_id": str(helpdesk_version.id),
+        "intended_action": "join_project",
+    }
+    session.save()
+
+    response = api_client.post(
+        f"/api/v1/project-versions/{helpdesk_version.id}/stack-selection/",
+        {"technology_stack_id": str(django_stack.id)},
+        format="json",
+    )
+
+    assert response.status_code == 403
+    assert api_client.session["participation_context"] == {
+        "selected_role_id": str(backend_role.id),
+        "project_version_id": str(helpdesk_version.id),
+        "intended_action": "join_project",
+    }
+    assert "project_stack_selection" not in api_client.session
+
+
+def test_template_scoped_stack_selection_route_is_removed(
+    api_client,
     user,
     profile,
     helpdesk_template,
     backend_role,
     django_stack,
 ):
-    if authenticated:
-        profile.selected_role = backend_role
-        profile.save(update_fields=["selected_role"])
-        api_client.force_login(user)
-    else:
-        session = api_client.session
-        session["participation_context"] = {
-            "selected_role_id": str(backend_role.id)
-        }
-        session.save()
+    profile.selected_role = backend_role
+    profile.save(update_fields=["selected_role"])
+    api_client.force_login(user)
 
     response = api_client.post(
         f"/api/v1/projects/{helpdesk_template.id}/stack-selection/",
@@ -549,47 +570,69 @@ def test_allowlist_stack_selection_is_consistent_for_anonymous_and_authenticated
         format="json",
     )
 
-    assert response.status_code == 200
-    assert response.data == {
-        "selected_project_id": str(helpdesk_template.id),
-        "selected_role_id": str(backend_role.id),
-        "selected_stack_id": str(django_stack.id),
-    }
-    context = api_client.session["participation_context"]
-    assert context == {
-        "selected_project_id": str(helpdesk_template.id),
-        "selected_role_id": str(backend_role.id),
-        "selected_stack_id": str(django_stack.id),
-    }
-    detail = api_client.get(f"/api/v1/projects/{helpdesk_template.id}/")
-    assert detail.data["published_version"]["role_context"]["selected_stack"][
-        "id"
-    ] == str(django_stack.id)
+    assert response.status_code == 404
+    assert "project_stack_selection" not in api_client.session
 
 
-@pytest.mark.parametrize("authenticated", [False, True])
-def test_incompatible_stack_selection_is_rejected(
+def test_authenticated_allowlist_stack_confirmation_uses_exact_version(
     api_client,
-    authenticated,
     user,
     profile,
-    helpdesk_template,
+    helpdesk_version,
+    backend_role,
+    django_stack,
+):
+    profile.selected_role = backend_role
+    profile.save(update_fields=["selected_role"])
+    api_client.force_login(user)
+    session = api_client.session
+    session["participation_context"] = {
+        "selected_role_id": str(backend_role.id),
+        "project_version_id": str(helpdesk_version.id),
+        "intended_action": "join_project",
+    }
+    session.save()
+
+    response = api_client.post(
+        f"/api/v1/project-versions/{helpdesk_version.id}/stack-selection/",
+        {"technology_stack_id": str(django_stack.id)},
+        format="json",
+    )
+
+    assert response.status_code == 200
+    assert response.data == {
+        "project_version_id": str(helpdesk_version.id),
+        "selected_role_id": str(backend_role.id),
+        "selected_stack_id": str(django_stack.id),
+    }
+    assert api_client.session["project_stack_selection"] == {
+        "user_id": str(user.id),
+        "project_version_id": str(helpdesk_version.id),
+        "selected_stack_id": str(django_stack.id),
+    }
+    assert "selected_stack_id" not in api_client.session["participation_context"]
+    detail = api_client.get(
+        f"/api/v1/project-versions/{helpdesk_version.id}/"
+    )
+    assert detail.data["role_context"]["selected_stack"]["id"] == str(
+        django_stack.id
+    )
+
+
+def test_incompatible_stack_confirmation_is_rejected(
+    api_client,
+    user,
+    profile,
+    helpdesk_version,
     backend_role,
     react_stack,
 ):
-    if authenticated:
-        profile.selected_role = backend_role
-        profile.save(update_fields=["selected_role"])
-        api_client.force_login(user)
-    else:
-        session = api_client.session
-        session["participation_context"] = {
-            "selected_role_id": str(backend_role.id)
-        }
-        session.save()
+    profile.selected_role = backend_role
+    profile.save(update_fields=["selected_role"])
+    api_client.force_login(user)
 
     response = api_client.post(
-        f"/api/v1/projects/{helpdesk_template.id}/stack-selection/",
+        f"/api/v1/project-versions/{helpdesk_version.id}/stack-selection/",
         {"technology_stack_id": str(react_stack.id)},
         format="json",
     )
@@ -600,16 +643,216 @@ def test_incompatible_stack_selection_is_rejected(
             "This stack is not available for the selected project role."
         ]
     }
-    assert "selected_stack_id" not in api_client.session.get(
-        "participation_context", {}
+    assert "project_stack_selection" not in api_client.session
+
+
+def test_stack_confirmation_rejects_client_supplied_role(
+    api_client,
+    user,
+    profile,
+    helpdesk_version,
+    backend_role,
+    frontend_role,
+    django_stack,
+):
+    profile.selected_role = backend_role
+    profile.save(update_fields=["selected_role"])
+    api_client.force_login(user)
+
+    response = api_client.post(
+        f"/api/v1/project-versions/{helpdesk_version.id}/stack-selection/",
+        {
+            "technology_stack_id": str(django_stack.id),
+            "role_id": str(frontend_role.id),
+        },
+        format="json",
     )
 
+    assert response.status_code == 400
+    assert response.data == {"role_id": ["Unknown field."]}
+    assert "project_stack_selection" not in api_client.session
 
-def test_stackless_role_rejects_selection_and_has_no_fake_stack(
+
+def test_stack_confirmation_rejects_an_unpublished_exact_version(
     api_client,
     user,
     profile,
     helpdesk_template,
+    backend_role,
+    django_stack,
+):
+    profile.selected_role = backend_role
+    profile.save(update_fields=["selected_role"])
+    api_client.force_login(user)
+    draft = ProjectVersion.objects.create(
+        project_template=helpdesk_template,
+        version_number=2,
+    )
+
+    response = api_client.post(
+        f"/api/v1/project-versions/{draft.id}/stack-selection/",
+        {"technology_stack_id": str(django_stack.id)},
+        format="json",
+    )
+
+    assert response.status_code == 404
+    assert response.data == {"detail": "Published project version not found."}
+    assert "project_stack_selection" not in api_client.session
+
+
+def test_newer_publication_does_not_replace_exact_stack_confirmation_version(
+    api_client,
+    user,
+    profile,
+    helpdesk_template,
+    helpdesk_version,
+    backend_role,
+    django_stack,
+):
+    profile.selected_role = backend_role
+    profile.save(update_fields=["selected_role"])
+    api_client.force_login(user)
+    newer_version = ProjectVersion.objects.create(
+        project_template=helpdesk_template,
+        version_number=2,
+        published_at=timezone.now(),
+    )
+
+    response = api_client.post(
+        f"/api/v1/project-versions/{helpdesk_version.id}/stack-selection/",
+        {"technology_stack_id": str(django_stack.id)},
+        format="json",
+    )
+
+    assert response.status_code == 200
+    assert response.data["project_version_id"] == str(helpdesk_version.id)
+    assert response.data["project_version_id"] != str(newer_version.id)
+    assert api_client.session["project_stack_selection"][
+        "project_version_id"
+    ] == str(helpdesk_version.id)
+
+
+def test_stack_confirmation_does_not_bleed_between_template_versions(
+    api_client,
+    user,
+    profile,
+    helpdesk_template,
+    helpdesk_version,
+    backend_role,
+    django_stack,
+):
+    profile.selected_role = backend_role
+    profile.save(update_fields=["selected_role"])
+    api_client.force_login(user)
+    aspnet_stack = TechnologyStack.objects.get(code="aspnet-core-ef-core")
+    newer_version = ProjectVersion.objects.create(
+        project_template=helpdesk_template,
+        version_number=2,
+        published_at=timezone.now(),
+    )
+    requirement = ProjectRoleRequirement.objects.create(
+        project_version=newer_version,
+        role=backend_role,
+        requires_stack=True,
+        stack_policy=StackPolicy.ALLOWLIST,
+    )
+    ProjectRoleAllowedStack.objects.create(
+        role_requirement=requirement,
+        technology_stack=django_stack,
+    )
+    ProjectRoleAllowedStack.objects.create(
+        role_requirement=requirement,
+        technology_stack=aspnet_stack,
+    )
+    confirmation = api_client.post(
+        f"/api/v1/project-versions/{helpdesk_version.id}/stack-selection/",
+        {"technology_stack_id": str(django_stack.id)},
+        format="json",
+    )
+
+    original_detail = api_client.get(
+        f"/api/v1/project-versions/{helpdesk_version.id}/"
+    )
+    newer_detail = api_client.get(
+        f"/api/v1/project-versions/{newer_version.id}/"
+    )
+
+    assert confirmation.status_code == 200
+    assert original_detail.data["role_context"]["selected_stack"]["id"] == str(
+        django_stack.id
+    )
+    assert newer_detail.data["role_context"]["selected_stack"] is None
+
+
+def test_fixed_stack_is_confirmed_without_client_stack_input(
+    api_client,
+    user,
+    profile,
+    helpdesk_version,
+    frontend_role,
+    react_stack,
+):
+    profile.selected_role = frontend_role
+    profile.save(update_fields=["selected_role"])
+    api_client.force_login(user)
+
+    response = api_client.post(
+        f"/api/v1/project-versions/{helpdesk_version.id}/stack-selection/",
+        {},
+        format="json",
+    )
+
+    assert response.status_code == 200
+    assert response.data["selected_stack_id"] == str(react_stack.id)
+
+
+def test_open_stack_confirmation_uses_only_authenticated_user_skills(
+    api_client,
+    user,
+    profile,
+    helpdesk_template,
+    backend_role,
+    django_stack,
+    react_stack,
+):
+    profile.selected_role = backend_role
+    profile.save(update_fields=["selected_role"])
+    UserSkill.objects.create(profile=profile, technology_stack=django_stack)
+    UserSkill.objects.create(profile=profile, technology_stack=react_stack)
+    api_client.force_login(user)
+    version = ProjectVersion.objects.create(
+        project_template=helpdesk_template,
+        version_number=2,
+        published_at=timezone.now(),
+    )
+    ProjectRoleRequirement.objects.create(
+        project_version=version,
+        role=backend_role,
+        requires_stack=True,
+        stack_policy=StackPolicy.OPEN,
+    )
+
+    incompatible = api_client.post(
+        f"/api/v1/project-versions/{version.id}/stack-selection/",
+        {"technology_stack_id": str(react_stack.id)},
+        format="json",
+    )
+    confirmed = api_client.post(
+        f"/api/v1/project-versions/{version.id}/stack-selection/",
+        {},
+        format="json",
+    )
+
+    assert incompatible.status_code == 400
+    assert confirmed.status_code == 200
+    assert confirmed.data["selected_stack_id"] == str(django_stack.id)
+
+
+def test_stackless_role_confirms_null_without_a_fake_stack(
+    api_client,
+    user,
+    profile,
+    helpdesk_version,
     designer_role,
     react_stack,
 ):
@@ -617,41 +860,122 @@ def test_stackless_role_rejects_selection_and_has_no_fake_stack(
     profile.save(update_fields=["selected_role"])
     api_client.force_login(user)
 
-    selection = api_client.post(
-        f"/api/v1/projects/{helpdesk_template.id}/stack-selection/",
+    invalid = api_client.post(
+        f"/api/v1/project-versions/{helpdesk_version.id}/stack-selection/",
         {"technology_stack_id": str(react_stack.id)},
         format="json",
     )
-    detail = api_client.get(f"/api/v1/projects/{helpdesk_template.id}/")
+    confirmed = api_client.post(
+        f"/api/v1/project-versions/{helpdesk_version.id}/stack-selection/",
+        {},
+        format="json",
+    )
 
-    assert selection.status_code == 400
-    role_context = detail.data["published_version"]["role_context"]
-    assert role_context["requires_stack"] is False
-    assert role_context["compatible_stacks"] == []
-    assert role_context["auto_selected_stack"] is None
-    assert role_context["selected_stack"] is None
+    assert invalid.status_code == 400
+    assert confirmed.status_code == 200
+    assert confirmed.data["selected_stack_id"] is None
+    assert api_client.session["project_stack_selection"] == {
+        "user_id": str(user.id),
+        "project_version_id": str(helpdesk_version.id),
+        "selected_stack_id": None,
+    }
 
 
-def test_anonymous_stack_selection_requires_csrf(
-    csrf_client,
-    helpdesk_template,
+def test_stack_confirmation_blocks_guest_and_profile_role_conflict(
+    api_client,
+    user,
+    profile,
+    helpdesk_version,
     backend_role,
+    frontend_role,
     django_stack,
 ):
-    session = csrf_client.session
+    profile.selected_role = backend_role
+    profile.save(update_fields=["selected_role"])
+    api_client.force_login(user)
+    session = api_client.session
     session["participation_context"] = {
-        "selected_role_id": str(backend_role.id)
+        "selected_role_id": str(frontend_role.id),
+        "project_version_id": str(helpdesk_version.id),
     }
     session.save()
 
+    response = api_client.post(
+        f"/api/v1/project-versions/{helpdesk_version.id}/stack-selection/",
+        {"technology_stack_id": str(django_stack.id)},
+        format="json",
+    )
+
+    assert response.status_code == 400
+    assert response.data == {
+        "role": [
+            "The continuation role does not match the authenticated profile role."
+        ]
+    }
+    profile.refresh_from_db()
+    assert profile.selected_role_id == backend_role.id
+    assert "project_stack_selection" not in api_client.session
+
+
+def test_stack_confirmation_blocks_a_different_continued_version(
+    api_client,
+    user,
+    profile,
+    helpdesk_template,
+    helpdesk_version,
+    backend_role,
+    django_stack,
+):
+    profile.selected_role = backend_role
+    profile.save(update_fields=["selected_role"])
+    api_client.force_login(user)
+    other_version = ProjectVersion.objects.create(
+        project_template=helpdesk_template,
+        version_number=2,
+        published_at=timezone.now(),
+    )
+    session = api_client.session
+    session["participation_context"] = {
+        "selected_role_id": str(backend_role.id),
+        "project_version_id": str(helpdesk_version.id),
+    }
+    session.save()
+
+    response = api_client.post(
+        f"/api/v1/project-versions/{other_version.id}/stack-selection/",
+        {"technology_stack_id": str(django_stack.id)},
+        format="json",
+    )
+
+    assert response.status_code == 400
+    assert response.data == {
+        "project_version_id": [
+            "The requested version does not match the continued project version."
+        ]
+    }
+    assert "project_stack_selection" not in api_client.session
+
+
+def test_authenticated_stack_confirmation_requires_csrf(
+    csrf_client,
+    user,
+    profile,
+    helpdesk_version,
+    backend_role,
+    django_stack,
+):
+    profile.selected_role = backend_role
+    profile.save(update_fields=["selected_role"])
+    csrf_client.force_login(user)
+
     response = csrf_client.post(
-        f"/api/v1/projects/{helpdesk_template.id}/stack-selection/",
+        f"/api/v1/project-versions/{helpdesk_version.id}/stack-selection/",
         {"technology_stack_id": str(django_stack.id)},
         format="json",
     )
 
     assert response.status_code == 403
-    assert "selected_stack_id" not in csrf_client.session["participation_context"]
+    assert "project_stack_selection" not in csrf_client.session
 
 
 def test_unknown_project_returns_safe_404(api_client):

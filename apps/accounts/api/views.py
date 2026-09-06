@@ -1,4 +1,4 @@
-from django.contrib.auth import login, logout
+from django.contrib.auth import logout
 from django.middleware.csrf import get_token
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_protect, ensure_csrf_cookie
@@ -20,6 +20,7 @@ from apps.accounts.services import (
     RegistrationData,
     authenticate_user,
     register_and_start_session,
+    start_authenticated_session,
 )
 
 
@@ -76,7 +77,7 @@ class LoginView(APIView):
                 code="invalid_credentials",
             ) from exc
 
-        login(request, user, backend="django.contrib.auth.backends.ModelBackend")
+        start_authenticated_session(request=request, user=user)
         return Response(UserOutputSerializer(user).data)
 
 

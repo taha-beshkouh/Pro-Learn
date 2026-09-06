@@ -121,6 +121,10 @@ class GuestContextUpdateSerializer(StrictFieldsSerializer):
         allow_null=True,
         required=False,
     )
+    project_version_id = serializers.UUIDField(
+        allow_null=True,
+        required=False,
+    )
     intended_action = serializers.RegexField(
         regex=r"^[a-z][a-z0-9_.:-]*$",
         max_length=64,
@@ -139,4 +143,20 @@ class GuestContextUpdateSerializer(StrictFieldsSerializer):
         if value is None:
             return value
         return validate_internal_return_path(value)
+
+    def validate_project_version_id(self, value):
+        if value is None:
+            return value
+
+        from apps.projects.models import ProjectVersion
+
+        if not ProjectVersion.objects.filter(
+            id=value,
+            published_at__isnull=False,
+        ).exists():
+            raise serializers.ValidationError(
+                "Published project version not found.",
+                code="does_not_exist",
+            )
+        return value
 

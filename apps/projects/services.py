@@ -1,11 +1,9 @@
 from dataclasses import dataclass
-from uuid import UUID
 
 from django.core.exceptions import ValidationError
 from django.contrib.sessions.backends.base import SessionBase
 
 from apps.profiles.models import Role, TechnologyStack, UserProfile
-from apps.profiles.services import update_guest_context
 from apps.projects.exceptions import (
     InvalidProjectStackSelection,
     ProjectConfigurationError,
@@ -17,6 +15,9 @@ from apps.projects.models import (
     SprintTemplate,
     StackPolicy,
 )
+
+
+AUTHENTICATED_STACK_SELECTION_SESSION_KEY = "project_stack_selection"
 
 
 @dataclass(frozen=True)
@@ -136,15 +137,41 @@ def resolve_project_stack_selection(
     )
 
 
-def select_project_stack(
+def authenticated_stack_selection_from_session(*, session: SessionBase) -> dict:
+    selection = session.get(AUTHENTICATED_STACK_SELECTION_SESSION_KEY, {})
+    if not isinstance(selection, dict):
+        return {}
+    allowed_keys = {"user_id", "project_version_id", "selected_stack_id"}
+    return {key: value for key, value in selection.items() if key in allowed_keys}
+
+
+def store_authenticated_stack_selection(
+    *,
+    session: SessionBase,
+    profile: UserProfile,
+    project_version: ProjectVersion,
+    selected_stack: TechnologyStack | None,
+) -> dict:
+    selection = {
+        "user_id": str(profile.user_id),
+        "project_version_id": str(project_version.id),
+        "selected_stack_id": str(selected_stack.id) if selected_stack else None,
+    }
+    session[AUTHENTICATED_STACK_SELECTION_SESSION_KEY] = selection
+    session.modified = True
+    return selection
+
+
+def confirm_project_version_stack(
     *,
     project_version: ProjectVersion,
-    role: Role,
-    profile: UserProfile | None,
-    technology_stack: TechnologyStack,
-    project_id: UUID,
+    profile: UserProfile,
+    technology_stack: TechnologyStack | None,
     session: SessionBase,
-) -> TechnologyStack:
+) -> TechnologyStack | None:
+    role = profile.selected_role
+    if role is None:
+        raise InvalidProjectStackSelection
     requirement = next(
         (
             item
@@ -161,14 +188,13 @@ def select_project_stack(
         requested_stack=technology_stack,
         reject_invalid=True,
     )
-    if result.selected_stack is None:
+    if requirement.requires_stack and result.selected_stack is None:
         raise InvalidProjectStackSelection
-    update_guest_context(
+
+    store_authenticated_stack_selection(
         session=session,
-        changes={
-            "selected_project_id": project_id,
-            "selected_role": role,
-            "selected_stack": result.selected_stack,
-        },
+        profile=profile,
+        project_version=project_version,
+        selected_stack=result.selected_stack,
     )
     return result.selected_stack

@@ -20,8 +20,10 @@ class ProfileLinkAlreadyRegistered(Exception):
     pass
 
 
-def create_profile_for_user(*, user: User) -> UserProfile:
-    return UserProfile.objects.create(user=user)
+def create_profile_for_user(
+    *, user: User, selected_role: Role | None = None
+) -> UserProfile:
+    return UserProfile.objects.create(user=user, selected_role=selected_role)
 
 
 def update_profile(*, profile: UserProfile, changes: dict) -> UserProfile:
@@ -113,8 +115,7 @@ def guest_context_from_session(*, session: SessionBase) -> dict:
         return {}
     allowed_keys = {
         "selected_role_id",
-        "selected_stack_id",
-        "selected_project_id",
+        "project_version_id",
         "intended_action",
         "return_path",
     }
@@ -125,8 +126,7 @@ def update_guest_context(*, session: SessionBase, changes: dict) -> dict:
     context = guest_context_from_session(session=session).copy()
     key_map = {
         "selected_role": "selected_role_id",
-        "selected_stack": "selected_stack_id",
-        "selected_project_id": "selected_project_id",
+        "project_version_id": "project_version_id",
         "intended_action": "intended_action",
         "return_path": "return_path",
     }
@@ -134,7 +134,7 @@ def update_guest_context(*, session: SessionBase, changes: dict) -> dict:
         session_key = key_map[key]
         if value is None or value == "":
             context.pop(session_key, None)
-        elif key in {"selected_role", "selected_stack"}:
+        elif key == "selected_role":
             context[session_key] = str(value.pk)
         else:
             context[session_key] = str(value)

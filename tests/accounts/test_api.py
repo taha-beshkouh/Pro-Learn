@@ -1,7 +1,8 @@
 import pytest
 from django.conf import settings
 
-from apps.profiles.models import UserProfile
+from apps.profiles.models import Role, RoleCode, UserProfile
+from apps.projects.models import ProjectVersion
 from tests.accounts.conftest import fetch_csrf_token
 
 
@@ -41,6 +42,47 @@ def test_register_creates_user_and_authenticated_session(
     user = django_user_model.objects.get(email="new.member@example.com")
     assert csrf_client.session["_auth_user_id"] == str(user.pk)
     assert UserProfile.objects.filter(user=user).exists()
+
+
+def test_registration_reconciles_role_and_preserves_exact_version_continuation(
+    csrf_client, django_user_model, password
+):
+    role = Role.objects.get(code=RoleCode.BACKEND_DEVELOPER)
+    project_version = ProjectVersion.objects.get(
+        project_template__slug="helpdesk-lite",
+        version_number=1,
+    )
+    return_path = f"/projects/{project_version.id}/stack-selection"
+    session = csrf_client.session
+    session["participation_context"] = {
+        "selected_role_id": str(role.id),
+        "project_version_id": str(project_version.id),
+        "intended_action": "join_project",
+        "return_path": return_path,
+    }
+    session["project_stack_selection"] = {
+        "user_id": "pre-authenticated-session-data-must-not-survive"
+    }
+    session.save()
+    csrf_token = fetch_csrf_token(csrf_client)
+
+    response = csrf_client.post(
+        REGISTER_URL,
+        {"email": "continuing@example.com", "password": password},
+        format="json",
+        HTTP_X_CSRFTOKEN=csrf_token,
+    )
+
+    assert response.status_code == 201
+    user = django_user_model.objects.get(email="continuing@example.com")
+    assert user.profile.selected_role_id == role.id
+    assert csrf_client.session["participation_context"] == {
+        "selected_role_id": str(role.id),
+        "project_version_id": str(project_version.id),
+        "intended_action": "join_project",
+        "return_path": return_path,
+    }
+    assert "project_stack_selection" not in csrf_client.session
 
 
 def test_register_requires_csrf_token(csrf_client, django_user_model, password):
@@ -138,6 +180,46 @@ def test_login_is_case_insensitive_and_rotates_session(
     assert response.data == {"id": str(user.pk), "email": user.email}
     assert csrf_client.session.session_key != previous_session_key
     assert csrf_client.cookies["csrftoken"].value != previous_csrf_cookie
+    assert csrf_client.session["anonymous_context"] == "preserved"
+
+
+def test_login_preserves_exact_version_without_overwriting_existing_profile_role(
+    csrf_client, user, password
+):
+    profile_role = Role.objects.get(code=RoleCode.BACKEND_DEVELOPER)
+    guest_role = Role.objects.get(code=RoleCode.FRONTEND_DEVELOPER)
+    UserProfile.objects.create(user=user, selected_role=profile_role)
+    project_version = ProjectVersion.objects.get(
+        project_template__slug="helpdesk-lite",
+        version_number=1,
+    )
+    return_path = f"/projects/{project_version.id}/stack-selection"
+    session = csrf_client.session
+    session["participation_context"] = {
+        "selected_role_id": str(guest_role.id),
+        "project_version_id": str(project_version.id),
+        "intended_action": "join_project",
+        "return_path": return_path,
+    }
+    session.save()
+    csrf_token = fetch_csrf_token(csrf_client)
+
+    response = csrf_client.post(
+        LOGIN_URL,
+        {"email": user.email, "password": password},
+        format="json",
+        HTTP_X_CSRFTOKEN=csrf_token,
+    )
+
+    assert response.status_code == 200
+    profile = UserProfile.objects.get(user=user)
+    assert profile.selected_role_id == profile_role.id
+    assert csrf_client.session["participation_context"] == {
+        "selected_role_id": str(guest_role.id),
+        "project_version_id": str(project_version.id),
+        "intended_action": "join_project",
+        "return_path": return_path,
+    }
 
 
 def test_login_requires_csrf_token(csrf_client, user, password):

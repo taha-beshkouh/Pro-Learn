@@ -3,6 +3,7 @@ import uuid
 import pytest
 
 from apps.profiles.models import ProfileLink, UserProfile, UserSkill
+from apps.projects.models import ProjectTemplate, ProjectVersion
 from tests.profiles.conftest import fetch_csrf_token
 
 
@@ -199,14 +200,19 @@ def test_guest_context_requires_csrf_for_writes(csrf_client):
 def test_guest_context_round_trip_does_not_create_user(
     csrf_client, django_user_model, backend_role
 ):
+    project_version = ProjectVersion.objects.get(
+        project_template__slug="helpdesk-lite",
+        version_number=1,
+    )
     csrf_token = fetch_csrf_token(csrf_client)
 
     response = csrf_client.patch(
         GUEST_CONTEXT_URL,
         {
             "selected_role_id": str(backend_role.id),
+            "project_version_id": str(project_version.id),
             "intended_action": "join_project",
-            "return_path": "/projects?level=1",
+            "return_path": f"/projects/{project_version.id}/stack-selection",
         },
         format="json",
         HTTP_X_CSRFTOKEN=csrf_token,
@@ -215,14 +221,15 @@ def test_guest_context_round_trip_does_not_create_user(
     assert response.status_code == 200
     assert response.data == {
         "selected_role_id": str(backend_role.id),
+        "project_version_id": str(project_version.id),
         "intended_action": "join_project",
-        "return_path": "/projects?level=1",
+        "return_path": f"/projects/{project_version.id}/stack-selection",
     }
     assert csrf_client.get(GUEST_CONTEXT_URL).data == response.data
     assert django_user_model.objects.count() == 0
 
 
-def test_guest_context_cannot_bypass_project_stack_validation(
+def test_guest_context_cannot_persist_a_final_stack(
     csrf_client, backend_role, django_stack
 ):
     csrf_token = fetch_csrf_token(csrf_client)
@@ -243,6 +250,29 @@ def test_guest_context_cannot_bypass_project_stack_validation(
         "selected_project_id": ["Unknown field."],
         "selected_stack_id": ["Unknown field."],
     }
+    assert csrf_client.get(GUEST_CONTEXT_URL).data == {}
+
+
+def test_guest_context_rejects_an_unpublished_project_version(csrf_client):
+    project_template = ProjectTemplate.objects.get(slug="helpdesk-lite")
+    draft = ProjectVersion.objects.create(
+        project_template=project_template,
+        version_number=2,
+    )
+    csrf_token = fetch_csrf_token(csrf_client)
+
+    response = csrf_client.patch(
+        GUEST_CONTEXT_URL,
+        {"project_version_id": str(draft.id)},
+        format="json",
+        HTTP_X_CSRFTOKEN=csrf_token,
+    )
+
+    assert response.status_code == 400
+    assert response.data == {
+        "project_version_id": ["Published project version not found."]
+    }
+    assert csrf_client.get(GUEST_CONTEXT_URL).data == {}
 
 
 @pytest.mark.parametrize("return_path", ["https://evil.example", "//evil.example"])

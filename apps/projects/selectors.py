@@ -20,6 +20,7 @@ from apps.projects.models import (
     RolePrerequisite,
     SprintTemplate,
 )
+from apps.projects.services import authenticated_stack_selection_from_session
 
 
 def level_list() -> QuerySet[Level]:
@@ -108,11 +109,17 @@ def profile_with_skills_for_request(*, request) -> UserProfile | None:
     )
 
 
-def selected_stack_for_request(*, request, project_id: UUID) -> TechnologyStack | None:
-    context = guest_context_from_session(session=request.session)
-    if context.get("selected_project_id") != str(project_id):
+def selected_stack_for_request(
+    *, request, project_version_id: UUID
+) -> TechnologyStack | None:
+    if not request.user.is_authenticated:
         return None
-    stack_id = context.get("selected_stack_id")
+    selection = authenticated_stack_selection_from_session(session=request.session)
+    if selection.get("user_id") != str(request.user.id):
+        return None
+    if selection.get("project_version_id") != str(project_version_id):
+        return None
+    stack_id = selection.get("selected_stack_id")
     if not stack_id:
         return None
     return TechnologyStack.objects.filter(id=stack_id).first()
