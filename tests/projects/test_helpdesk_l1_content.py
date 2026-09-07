@@ -9,9 +9,16 @@ from django.apps import apps as django_apps
 from django.db import connection
 from django.db.models import Count
 
-from apps.formations.services import ProposedMember, create_team_formation
+from apps.formations.models import ProjectReadiness
+from apps.formations.services import create_team_formation
 from apps.profiles.models import UserProfile
-from apps.projects.models import ProjectTaskTemplate, ProjectVersion, SprintTemplate
+from apps.projects.models import (
+    ProjectRoleRequirement,
+    ProjectTaskTemplate,
+    ProjectVersion,
+    SprintTemplate,
+)
+from apps.projects.services import resolve_project_stack_selection
 
 
 canonical_migration = import_module(
@@ -40,7 +47,7 @@ def valid_formation_reference(
             password=password,
             is_staff=True,
         )
-        members = []
+        readiness_ids = []
         member_specs = (
             (
                 "canonical-content-backend@example.com",
@@ -63,16 +70,32 @@ def valid_formation_reference(
                 email=email,
                 password=password,
             )
-            UserProfile.objects.create(
+            profile = UserProfile.objects.create(
                 user=member_user,
                 selected_role=role,
             )
-            members.append(ProposedMember(member_user, role, technology_stack))
+            requirement = ProjectRoleRequirement.objects.get(
+                project_version=project_version,
+                role=role,
+            )
+            selected_stack = resolve_project_stack_selection(
+                requirement=requirement,
+                profile=profile,
+                requested_stack=technology_stack,
+                reject_invalid=True,
+            ).selected_stack
+            readiness_ids.append(
+                ProjectReadiness.objects.create(
+                    user=member_user,
+                    role=role,
+                    project_version=project_version,
+                    technology_stack=selected_stack,
+                ).id
+            )
 
         return create_team_formation(
-            project_version=project_version,
             created_by=facilitator,
-            members=members,
+            readiness_ids=readiness_ids,
         )
 
     return create_reference

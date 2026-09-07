@@ -2,14 +2,20 @@ from django.contrib.sessions.backends.base import SessionBase
 from django.db import IntegrityError, transaction
 
 from apps.accounts.models import User
+from apps.formations.eligibility import (
+    ParticipationBlocker,
+    participation_blocker_for_user,
+)
 from apps.profiles.models import ProfileLink, Role, UserProfile, UserSkill
 
 
 GUEST_CONTEXT_SESSION_KEY = "participation_context"
 
 
-class RoleAlreadySelected(Exception):
-    pass
+class RoleChangeBlocked(Exception):
+    def __init__(self, *, reason: ParticipationBlocker):
+        self.reason = reason
+        super().__init__(reason.value)
 
 
 class SkillAlreadyRegistered(Exception):
@@ -42,11 +48,20 @@ def update_profile(*, profile: UserProfile, changes: dict) -> UserProfile:
 
 @transaction.atomic
 def select_profile_role(*, user: User, role: Role) -> UserProfile:
-    profile = UserProfile.objects.select_for_update().get(user=user)
+    # Shared participation lock order starts with the user, then the profile.
+    # Readiness and Formation creation use the same order, so either the role
+    # change commits first and their validation sees it, or their lifecycle
+    # state commits first and blocks this change.
+    locked_user = User.objects.select_for_update(of=("self",)).get(id=user.id)
+    profile = UserProfile.objects.select_for_update(of=("self",)).get(
+        user=locked_user
+    )
+    if profile.selected_role_id == role.id:
+        return profile
     if profile.selected_role_id is not None:
-        if profile.selected_role_id == role.id:
-            return profile
-        raise RoleAlreadySelected
+        blocker = participation_blocker_for_user(user_id=locked_user.id)
+        if blocker is not None:
+            raise RoleChangeBlocked(reason=blocker)
     profile.selected_role = role
     profile.save(update_fields=["selected_role", "updated_at"])
     return profile

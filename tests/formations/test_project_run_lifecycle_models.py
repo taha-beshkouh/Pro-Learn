@@ -66,9 +66,8 @@ def test_database_rejects_initial_deadline_not_matching_version_duration(
     proposed_members,
 ):
     formation = create_team_formation(
-        project_version=helpdesk_version,
         created_by=facilitator,
-        members=proposed_members,
+        readiness_ids=[readiness.id for readiness in proposed_members],
     )
     started_at = timezone.now()
 

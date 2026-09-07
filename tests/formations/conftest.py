@@ -5,9 +5,8 @@ from django.db import transaction
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from apps.formations.models import ProjectRun
+from apps.formations.models import ProjectReadiness, ProjectRun
 from apps.formations.services import (
-    ProposedMember,
     confirm_ready_check,
     create_team_formation,
 )
@@ -237,6 +236,7 @@ def helpdesk_version(formation_catalog):
 
 @pytest.fixture
 def proposed_members(
+    formation_catalog,
     backend_user,
     frontend_user,
     designer_user,
@@ -244,20 +244,35 @@ def proposed_members(
     frontend_role,
     designer_role,
     django_stack,
+    react_stack,
 ):
     return [
-        ProposedMember(backend_user, backend_role, django_stack),
-        ProposedMember(frontend_user, frontend_role, None),
-        ProposedMember(designer_user, designer_role, None),
+        ProjectReadiness.objects.create(
+            user=backend_user,
+            role=backend_role,
+            project_version=formation_catalog["project_version"],
+            technology_stack=django_stack,
+        ),
+        ProjectReadiness.objects.create(
+            user=frontend_user,
+            role=frontend_role,
+            project_version=formation_catalog["project_version"],
+            technology_stack=react_stack,
+        ),
+        ProjectReadiness.objects.create(
+            user=designer_user,
+            role=designer_role,
+            project_version=formation_catalog["project_version"],
+            technology_stack=None,
+        ),
     ]
 
 
 @pytest.fixture
 def formation(facilitator, helpdesk_version, proposed_members):
     return create_team_formation(
-        project_version=helpdesk_version,
         created_by=facilitator,
-        members=proposed_members,
+        readiness_ids=[readiness.id for readiness in proposed_members],
         now=timezone.now() - timedelta(hours=1),
     )
 
@@ -286,9 +301,8 @@ def runtime_project_run(
     runtime_work_items,
 ):
     formation = create_team_formation(
-        project_version=helpdesk_version,
         created_by=facilitator,
-        members=proposed_members,
+        readiness_ids=[readiness.id for readiness in proposed_members],
     )
     for ready_check in formation.ready_checks.order_by("role__code"):
         confirm_ready_check(ready_check_id=ready_check.id, user=ready_check.user)
@@ -307,9 +321,8 @@ def overdue_runtime_project_run(
         weeks=helpdesk_version.duration_weeks + 1
     )
     formation = create_team_formation(
-        project_version=helpdesk_version,
         created_by=facilitator,
-        members=proposed_members,
+        readiness_ids=[readiness.id for readiness in proposed_members],
         now=formation_started_at,
     )
     confirmed_at = formation_started_at + timedelta(hours=1)

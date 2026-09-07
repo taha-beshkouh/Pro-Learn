@@ -4,6 +4,7 @@ from rest_framework import serializers
 
 from apps.accounts.models import User
 from apps.common.serializers import StrictFieldsSerializer
+from apps.profiles.api.serializers import RoleSerializer
 
 
 class RegistrationInputSerializer(StrictFieldsSerializer):
@@ -43,3 +44,22 @@ class UserOutputSerializer(serializers.ModelSerializer):
         model = User
         fields = ("id", "email")
         read_only_fields = fields
+
+
+class LoginRoleConflictSerializer(serializers.Serializer):
+    guest_role = RoleSerializer(read_only=True)
+    persisted_role = RoleSerializer(read_only=True)
+
+
+class LoginResponseSerializer(UserOutputSerializer):
+    role_conflict = serializers.SerializerMethodField()
+
+    class Meta(UserOutputSerializer.Meta):
+        fields = (*UserOutputSerializer.Meta.fields, "role_conflict")
+        read_only_fields = fields
+
+    def get_role_conflict(self, obj):
+        conflict = self.context.get("role_conflict")
+        if conflict is None:
+            return None
+        return LoginRoleConflictSerializer(conflict).data

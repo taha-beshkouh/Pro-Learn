@@ -8,7 +8,7 @@ from django.db import IntegrityError, transaction
 from django.http import HttpRequest
 
 from apps.accounts.models import User
-from apps.profiles.models import Role
+from apps.profiles.models import Role, UserProfile
 from apps.profiles.services import (
     create_profile_for_user,
     guest_context_from_session,
@@ -30,6 +30,12 @@ class InvalidCredentials(Exception):
 class RegistrationData:
     email: str
     password: str
+
+
+@dataclass(frozen=True)
+class LoginRoleConflict:
+    guest_role: Role
+    persisted_role: Role
 
 
 def _uuid_or_none(value) -> UUID | None:
@@ -84,10 +90,10 @@ def _validated_guest_continuation(
 def _start_session_with_continuation(
     *, request: HttpRequest, user: User, continuation: dict
 ) -> None:
-    from apps.projects.services import AUTHENTICATED_STACK_SELECTION_SESSION_KEY
+    from apps.projects.services import clear_authenticated_stack_selection
 
     login(request, user, backend="django.contrib.auth.backends.ModelBackend")
-    request.session.pop(AUTHENTICATED_STACK_SELECTION_SESSION_KEY, None)
+    clear_authenticated_stack_selection(session=request.session)
     update_guest_context(session=request.session, changes=continuation)
     request.session.save()
 
@@ -121,10 +127,29 @@ def authenticate_user(*, request: HttpRequest, email: str, password: str) -> Use
     return user
 
 
-def start_authenticated_session(*, request: HttpRequest, user: User) -> None:
-    _, continuation = _validated_guest_continuation(request=request)
+def start_authenticated_session(
+    *, request: HttpRequest, user: User
+) -> LoginRoleConflict | None:
+    guest_role, continuation = _validated_guest_continuation(request=request)
+    profile = (
+        UserProfile.objects.select_related("selected_role")
+        .filter(user=user)
+        .first()
+    )
+    persisted_role = profile.selected_role if profile is not None else None
+    role_conflict = (
+        LoginRoleConflict(
+            guest_role=guest_role,
+            persisted_role=persisted_role,
+        )
+        if guest_role is not None
+        and persisted_role is not None
+        and guest_role.id != persisted_role.id
+        else None
+    )
     _start_session_with_continuation(
         request=request,
         user=user,
         continuation=continuation,
     )
+    return role_conflict

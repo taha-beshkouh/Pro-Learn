@@ -10,7 +10,9 @@ from apps.formations.api.views import (
     DeclineReadyCheckView,
     MarkSprintUnderReviewView,
     MarkProjectRunIncompleteView,
+    MyProjectReadinessView,
     MyReadyCheckListView,
+    ProjectReadinessCandidateListView,
     ReplaceReadyCheckView,
     RequestSprintChangesView,
     OpenSprintView,
@@ -23,6 +25,16 @@ from apps.formations.api.views import (
 app_name = "formations"
 
 urlpatterns = [
+    path(
+        "project-readiness/me/",
+        MyProjectReadinessView.as_view(),
+        name="my-project-readiness",
+    ),
+    path(
+        "project-readiness/",
+        ProjectReadinessCandidateListView.as_view(),
+        name="project-readiness-candidates",
+    ),
     path("team-formations/", TeamFormationListCreateView.as_view(), name="list-create"),
     path(
         "team-formations/<uuid:formation_id>/",

@@ -148,6 +148,7 @@ def test_register_rejects_mass_assignment_fields(
             "password": password,
             "is_staff": True,
             "is_superuser": True,
+            "role_id": "00000000-0000-0000-0000-000000000001",
         },
         format="json",
         HTTP_X_CSRFTOKEN=csrf_token,
@@ -156,6 +157,7 @@ def test_register_rejects_mass_assignment_fields(
     assert response.status_code == 400
     assert response.data["is_staff"] == ["Unknown field."]
     assert response.data["is_superuser"] == ["Unknown field."]
+    assert response.data["role_id"] == ["Unknown field."]
     assert django_user_model.objects.count() == 0
 
 
@@ -177,10 +179,59 @@ def test_login_is_case_insensitive_and_rotates_session(
     )
 
     assert response.status_code == 200
-    assert response.data == {"id": str(user.pk), "email": user.email}
+    assert response.data == {
+        "id": str(user.pk),
+        "email": user.email,
+        "role_conflict": None,
+    }
     assert csrf_client.session.session_key != previous_session_key
     assert csrf_client.cookies["csrftoken"].value != previous_csrf_cookie
     assert csrf_client.session["anonymous_context"] == "preserved"
+
+
+def test_login_with_matching_guest_and_profile_role_has_no_conflict(
+    csrf_client,
+    user,
+    password,
+):
+    role = Role.objects.get(code=RoleCode.BACKEND_DEVELOPER)
+    UserProfile.objects.create(user=user, selected_role=role)
+    session = csrf_client.session
+    session["participation_context"] = {"selected_role_id": str(role.id)}
+    session.save()
+    csrf_token = fetch_csrf_token(csrf_client)
+
+    response = csrf_client.post(
+        LOGIN_URL,
+        {"email": user.email, "password": password},
+        format="json",
+        HTTP_X_CSRFTOKEN=csrf_token,
+    )
+
+    assert response.status_code == 200
+    assert response.data["role_conflict"] is None
+    assert UserProfile.objects.get(user=user).selected_role_id == role.id
+
+
+def test_login_with_persisted_role_and_no_guest_role_has_no_conflict(
+    csrf_client,
+    user,
+    password,
+):
+    role = Role.objects.get(code=RoleCode.BACKEND_DEVELOPER)
+    UserProfile.objects.create(user=user, selected_role=role)
+    csrf_token = fetch_csrf_token(csrf_client)
+
+    response = csrf_client.post(
+        LOGIN_URL,
+        {"email": user.email, "password": password},
+        format="json",
+        HTTP_X_CSRFTOKEN=csrf_token,
+    )
+
+    assert response.status_code == 200
+    assert response.data["role_conflict"] is None
+    assert UserProfile.objects.get(user=user).selected_role_id == role.id
 
 
 def test_login_preserves_exact_version_without_overwriting_existing_profile_role(
@@ -212,6 +263,18 @@ def test_login_preserves_exact_version_without_overwriting_existing_profile_role
     )
 
     assert response.status_code == 200
+    assert response.data["role_conflict"] == {
+        "guest_role": {
+            "id": str(guest_role.id),
+            "code": guest_role.code,
+            "name": guest_role.name,
+        },
+        "persisted_role": {
+            "id": str(profile_role.id),
+            "code": profile_role.code,
+            "name": profile_role.name,
+        },
+    }
     profile = UserProfile.objects.get(user=user)
     assert profile.selected_role_id == profile_role.id
     assert csrf_client.session["participation_context"] == {

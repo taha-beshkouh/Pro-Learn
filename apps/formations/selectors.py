@@ -1,7 +1,13 @@
-from django.db.models import Prefetch
+from django.db.models import Exists, F, OuterRef, Prefetch
 
 from apps.accounts.models import User
+from apps.formations.eligibility import (
+    active_project_readinesses,
+    active_project_run_memberships,
+    current_unresolved_ready_checks,
+)
 from apps.formations.models import (
+    ProjectReadiness,
     ProjectRun,
     ProjectRunState,
     ReadyCheck,
@@ -11,6 +17,48 @@ from apps.formations.models import (
     TeamMember,
 )
 from apps.projects.models import ProjectTaskTemplate
+
+
+def active_project_readiness_for_user(*, user: User) -> ProjectReadiness:
+    return active_project_readinesses().select_related(
+        "user",
+        "role",
+        "technology_stack",
+        "project_version",
+        "project_version__project_template",
+    ).get(user=user)
+
+
+def active_project_readiness_candidates(*, project_version_id):
+    current_formation = current_unresolved_ready_checks().filter(
+        user_id=OuterRef("user_id"),
+    )
+    active_project_run = active_project_run_memberships().filter(
+        user_id=OuterRef("user_id"),
+    )
+    return (
+        active_project_readinesses().select_related(
+            "user",
+            "role",
+            "technology_stack",
+            "project_version",
+            "project_version__project_template",
+        )
+        .filter(
+            project_version_id=project_version_id,
+            user__is_active=True,
+            user__profile__selected_role_id=F("role_id"),
+        )
+        .annotate(
+            has_current_formation=Exists(current_formation),
+            has_active_project_run=Exists(active_project_run),
+        )
+        .filter(
+            has_current_formation=False,
+            has_active_project_run=False,
+        )
+        .order_by("role__name", "created_at", "id")
+    )
 
 
 def _ready_checks_queryset():

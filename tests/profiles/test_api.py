@@ -40,6 +40,35 @@ def test_profile_requires_authentication(api_client):
     assert api_client.get(PROFILE_URL).status_code == 403
 
 
+def test_role_mutation_requires_authentication(api_client, backend_role):
+    response = api_client.post(
+        SELECT_ROLE_URL,
+        {"role_id": str(backend_role.id)},
+        format="json",
+    )
+
+    assert response.status_code == 403
+
+
+def test_authenticated_role_mutation_requires_csrf(
+    csrf_client,
+    user,
+    profile,
+    backend_role,
+):
+    csrf_client.force_login(user)
+
+    response = csrf_client.post(
+        SELECT_ROLE_URL,
+        {"role_id": str(backend_role.id)},
+        format="json",
+    )
+
+    assert response.status_code == 403
+    profile.refresh_from_db()
+    assert profile.selected_role is None
+
+
 def test_profile_read_and_update_are_current_user_only(
     api_client, user, profile, backend_role
 ):
@@ -77,7 +106,9 @@ def test_profile_rejects_role_mass_assignment(api_client, user, profile, backend
     assert profile.selected_role is None
 
 
-def test_role_can_be_selected_once(api_client, user, profile, backend_role, frontend_role):
+def test_role_selection_supports_initial_idempotent_and_eligible_change(
+    api_client, user, profile, backend_role, frontend_role
+):
     api_client.force_login(user)
 
     first = api_client.post(
@@ -87,15 +118,64 @@ def test_role_can_be_selected_once(api_client, user, profile, backend_role, fron
     )
     second = api_client.post(
         SELECT_ROLE_URL,
+        {"role_id": str(backend_role.id)},
+        format="json",
+    )
+    changed = api_client.post(
+        SELECT_ROLE_URL,
         {"role_id": str(frontend_role.id)},
         format="json",
     )
 
     assert first.status_code == 200
     assert first.data["selected_role"]["code"] == "BACKEND_DEVELOPER"
-    assert second.status_code == 400
+    assert second.status_code == 200
+    assert changed.status_code == 200
+    assert changed.data["selected_role"]["code"] == "FRONTEND_DEVELOPER"
     profile.refresh_from_db()
-    assert profile.selected_role == backend_role
+    assert profile.selected_role == frontend_role
+
+
+def test_role_selection_rejects_an_unknown_role(api_client, user, profile):
+    api_client.force_login(user)
+
+    response = api_client.post(
+        SELECT_ROLE_URL,
+        {"role_id": str(uuid.uuid4())},
+        format="json",
+    )
+
+    assert response.status_code == 400
+    assert "role_id" in response.data
+    profile.refresh_from_db()
+    assert profile.selected_role is None
+
+
+def test_role_selection_cannot_target_another_user(
+    api_client,
+    user,
+    profile,
+    other_user,
+    other_profile,
+    backend_role,
+):
+    api_client.force_login(user)
+
+    response = api_client.post(
+        SELECT_ROLE_URL,
+        {
+            "role_id": str(backend_role.id),
+            "user_id": str(other_user.id),
+        },
+        format="json",
+    )
+
+    assert response.status_code == 400
+    assert response.data["user_id"] == ["Unknown field."]
+    profile.refresh_from_db()
+    other_profile.refresh_from_db()
+    assert profile.selected_role is None
+    assert other_profile.selected_role is None
 
 
 def test_profile_link_crud_and_idor_protection(
@@ -226,6 +306,33 @@ def test_guest_context_round_trip_does_not_create_user(
         "return_path": f"/projects/{project_version.id}/stack-selection",
     }
     assert csrf_client.get(GUEST_CONTEXT_URL).data == response.data
+    assert django_user_model.objects.count() == 0
+
+
+def test_guest_may_change_temporary_role_without_mutating_a_profile(
+    csrf_client,
+    django_user_model,
+    backend_role,
+    frontend_role,
+):
+    csrf_token = fetch_csrf_token(csrf_client)
+
+    first = csrf_client.patch(
+        GUEST_CONTEXT_URL,
+        {"selected_role_id": str(backend_role.id)},
+        format="json",
+        HTTP_X_CSRFTOKEN=csrf_token,
+    )
+    changed = csrf_client.patch(
+        GUEST_CONTEXT_URL,
+        {"selected_role_id": str(frontend_role.id)},
+        format="json",
+        HTTP_X_CSRFTOKEN=csrf_client.cookies["csrftoken"].value,
+    )
+
+    assert first.status_code == 200
+    assert changed.status_code == 200
+    assert changed.data["selected_role_id"] == str(frontend_role.id)
     assert django_user_model.objects.count() == 0
 
 

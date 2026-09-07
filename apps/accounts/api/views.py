@@ -11,6 +11,7 @@ from rest_framework.views import APIView
 
 from apps.accounts.api.serializers import (
     LoginInputSerializer,
+    LoginResponseSerializer,
     RegistrationInputSerializer,
     UserOutputSerializer,
 )
@@ -77,8 +78,13 @@ class LoginView(APIView):
                 code="invalid_credentials",
             ) from exc
 
-        start_authenticated_session(request=request, user=user)
-        return Response(UserOutputSerializer(user).data)
+        role_conflict = start_authenticated_session(request=request, user=user)
+        return Response(
+            LoginResponseSerializer(
+                user,
+                context={"role_conflict": role_conflict},
+            ).data
+        )
 
 
 class LogoutView(APIView):

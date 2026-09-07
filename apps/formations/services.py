@@ -1,16 +1,26 @@
-from dataclasses import dataclass
 from datetime import timedelta
+from uuid import UUID
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
+from django.db.models import Prefetch
 from django.utils import timezone
 
 from apps.accounts.models import User
+from apps.formations.eligibility import (
+    active_project_readinesses,
+    active_project_run_memberships,
+    current_unresolved_ready_checks,
+)
 from apps.formations.exceptions import (
+    ActiveProjectReadinessExists,
     FormationAlreadyReady,
     FormationCompletionConflict,
     InvalidFormationMembers,
+    InvalidFormationReadiness,
     InvalidFormationStack,
+    InvalidProjectReadinessSelection,
     MemberHasActiveProjectRun,
+    MemberHasUnresolvedFormation,
     ProjectRunDeadlineNotReached,
     ProjectRunTransitionNotAllowed,
     ReadyCheckExpired,
@@ -24,6 +34,7 @@ from apps.formations.exceptions import (
 )
 from apps.formations.models import (
     READY_CHECK_DURATION,
+    ProjectReadiness,
     ProjectRun,
     ProjectRunState,
     ReadyCheck,
@@ -35,13 +46,22 @@ from apps.formations.models import (
     TeamFormation,
     TeamMember,
 )
-from apps.profiles.models import Role, RoleCode, TechnologyStack, UserProfile
+from apps.profiles.models import (
+    Role,
+    RoleCode,
+    TechnologyStack,
+    UserProfile,
+    UserSkill,
+)
 from apps.projects.exceptions import (
     InvalidProjectStackSelection,
     ProjectConfigurationError,
 )
 from apps.projects.models import ProjectRoleRequirement, ProjectVersion, SprintTemplate
-from apps.projects.services import resolve_project_stack_selection
+from apps.projects.services import (
+    authenticated_stack_selection_from_session,
+    resolve_project_stack_selection,
+)
 
 
 EXPECTED_ROLE_CODES = frozenset(RoleCode.values)
@@ -58,34 +78,168 @@ ALLOWED_SPRINT_TRANSITIONS = {
 }
 
 
-@dataclass(frozen=True)
-class ProposedMember:
-    user: User
-    role: Role
-    technology_stack: TechnologyStack | None = None
+def _selection_uuid(value) -> UUID:
+    try:
+        return UUID(str(value))
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise InvalidProjectReadinessSelection from exc
+
+
+def _locked_readiness_profile(*, user: User) -> UserProfile:
+    try:
+        return (
+            UserProfile.objects.select_for_update(of=("self",))
+            .select_related("selected_role")
+            .prefetch_related(
+                Prefetch(
+                    "skills",
+                    queryset=UserSkill.objects.select_for_update(
+                        of=("self",)
+                    )
+                    .select_related("technology_stack")
+                    .order_by("technology_stack__name"),
+                )
+            )
+            .get(user=user)
+        )
+    except UserProfile.DoesNotExist as exc:
+        raise InvalidProjectReadinessSelection from exc
+
+
+def _confirmed_readiness_selection_ids(
+    *, user: User, session
+) -> tuple[UUID, UUID | None]:
+    selection = authenticated_stack_selection_from_session(session=session)
+    required_keys = {"user_id", "project_version_id", "selected_stack_id"}
+    if not required_keys.issubset(selection):
+        raise InvalidProjectReadinessSelection
+    if _selection_uuid(selection["user_id"]) != user.id:
+        raise InvalidProjectReadinessSelection
+
+    project_version_id = _selection_uuid(selection["project_version_id"])
+    raw_stack_id = selection["selected_stack_id"]
+    selected_stack_id = (
+        _selection_uuid(raw_stack_id) if raw_stack_id is not None else None
+    )
+    return project_version_id, selected_stack_id
+
+
+def _validated_readiness_snapshot(
+    *,
+    profile: UserProfile,
+    project_version: ProjectVersion,
+    selected_stack_id: UUID | None,
+) -> tuple[Role, TechnologyStack | None]:
+    role = profile.selected_role
+    if role is None:
+        raise InvalidProjectReadinessSelection
+    try:
+        requirement = (
+            ProjectRoleRequirement.objects.select_related("role")
+            .prefetch_related(
+                "allowed_stacks__technology_stack",
+                "role__compatible_stack_links__technology_stack",
+            )
+            .get(project_version=project_version, role=role)
+        )
+    except ProjectRoleRequirement.DoesNotExist as exc:
+        raise InvalidProjectReadinessSelection from exc
+
+    selected_stack = None
+    if selected_stack_id is not None:
+        try:
+            selected_stack = TechnologyStack.objects.get(id=selected_stack_id)
+        except TechnologyStack.DoesNotExist as exc:
+            raise InvalidProjectReadinessSelection from exc
+
+    try:
+        result = resolve_project_stack_selection(
+            requirement=requirement,
+            profile=profile,
+            requested_stack=selected_stack,
+            reject_invalid=True,
+        )
+    except InvalidProjectStackSelection as exc:
+        raise InvalidProjectReadinessSelection from exc
+    if requirement.requires_stack:
+        if (
+            selected_stack is None
+            or result.selected_stack is None
+            or result.selected_stack.id != selected_stack.id
+        ):
+            raise InvalidProjectReadinessSelection
+    elif selected_stack is not None or result.selected_stack is not None:
+        raise InvalidProjectReadinessSelection
+    return role, result.selected_stack
+
+
+@transaction.atomic
+def create_project_readiness(*, user: User, session) -> ProjectReadiness:
+    """Persist one exact-version readiness from the Phase 1 confirmation."""
+
+    if not user.is_authenticated:
+        raise InvalidProjectReadinessSelection
+    project_version_id, selected_stack_id = _confirmed_readiness_selection_ids(
+        user=user,
+        session=session,
+    )
+    # Match ProjectRun startup's ProjectVersion -> user lock order.
+    try:
+        project_version = (
+            ProjectVersion.objects.select_for_update(of=("self",)).get(
+                id=project_version_id,
+                published_at__isnull=False,
+            )
+        )
+    except ProjectVersion.DoesNotExist as exc:
+        raise InvalidProjectReadinessSelection from exc
+
+    locked_user = User.objects.select_for_update().get(id=user.id)
+    if not locked_user.is_active:
+        raise InvalidProjectReadinessSelection
+
+    if active_project_readinesses().filter(
+        user=locked_user,
+    ).exists():
+        raise ActiveProjectReadinessExists
+
+    if current_unresolved_ready_checks().filter(
+        user=locked_user,
+    ).exists():
+        raise MemberHasUnresolvedFormation
+
+    if active_project_run_memberships().filter(
+        user=locked_user,
+    ).exists():
+        raise MemberHasActiveProjectRun
+
+    profile = _locked_readiness_profile(user=locked_user)
+    role, selected_stack = _validated_readiness_snapshot(
+        profile=profile,
+        project_version=project_version,
+        selected_stack_id=selected_stack_id,
+    )
+
+    try:
+        with transaction.atomic():
+            return ProjectReadiness.objects.create(
+                user=locked_user,
+                role=role,
+                project_version=project_version,
+                technology_stack=selected_stack,
+            )
+    except IntegrityError as exc:
+        if active_project_readinesses().filter(
+            user=locked_user,
+        ).exists():
+            raise ActiveProjectReadinessExists from exc
+        raise
 
 
 def validate_member_roles(*, role_codes) -> None:
     codes = tuple(role_codes)
     if len(codes) != 3 or len(set(codes)) != 3 or set(codes) != EXPECTED_ROLE_CODES:
         raise InvalidFormationMembers
-
-
-def _profile_for_member(*, member: ProposedMember) -> UserProfile:
-    try:
-        profile = (
-            UserProfile.objects.select_related("selected_role")
-            .prefetch_related(
-                "skills__technology_stack",
-                "selected_role__compatible_stack_links__technology_stack",
-            )
-            .get(user=member.user)
-        )
-    except UserProfile.DoesNotExist as exc:
-        raise InvalidFormationMembers from exc
-    if not member.user.is_active or profile.selected_role_id != member.role.id:
-        raise InvalidFormationMembers
-    return profile
 
 
 def _requirement_for_member(
@@ -104,61 +258,214 @@ def _requirement_for_member(
     return requirement
 
 
-def _validated_stack_for_member(
+def _formation_readiness_uuid(value) -> UUID:
+    try:
+        return UUID(str(value))
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise InvalidFormationReadiness from exc
+
+
+def _normalized_formation_readiness_ids(*, readiness_ids, expected_count: int):
+    ids = tuple(_formation_readiness_uuid(value) for value in readiness_ids)
+    if len(ids) != expected_count or len(set(ids)) != expected_count:
+        raise InvalidFormationReadiness
+    return tuple(sorted(ids, key=str))
+
+
+def _locked_formation_profiles(*, user_ids) -> dict:
+    profiles = list(
+        UserProfile.objects.select_for_update(of=("self",))
+        .select_related("selected_role")
+        .prefetch_related(
+            Prefetch(
+                "skills",
+                queryset=UserSkill.objects.select_for_update(of=("self",))
+                .select_related("technology_stack")
+                .order_by("profile_id", "technology_stack__name", "id"),
+            )
+        )
+        .filter(user_id__in=user_ids)
+        .order_by("user_id")
+    )
+    if len(profiles) != len(user_ids):
+        raise InvalidFormationMembers
+    return {profile.user_id: profile for profile in profiles}
+
+
+def _validated_stack_for_readiness(
     *,
     project_version: ProjectVersion,
-    member: ProposedMember,
+    readiness: ProjectReadiness,
+    profile: UserProfile,
 ):
-    profile = _profile_for_member(member=member)
     requirement = _requirement_for_member(
         project_version=project_version,
-        role=member.role,
+        role=readiness.role,
     )
     try:
         result = resolve_project_stack_selection(
             requirement=requirement,
             profile=profile,
-            requested_stack=member.technology_stack,
+            requested_stack=readiness.technology_stack,
             reject_invalid=True,
         )
     except InvalidProjectStackSelection as exc:
         raise InvalidFormationStack from exc
-    if requirement.requires_stack and result.selected_stack is None:
+    if requirement.requires_stack and (
+        readiness.technology_stack is None
+        or result.selected_stack is None
+        or result.selected_stack.id != readiness.technology_stack_id
+    ):
         raise InvalidFormationStack
-    if not requirement.requires_stack and result.selected_stack is not None:
+    if not requirement.requires_stack and (
+        readiness.technology_stack is not None or result.selected_stack is not None
+    ):
         raise InvalidFormationStack
     return result.selected_stack
+
+
+def _locked_valid_formation_readinesses(
+    *,
+    readiness_ids,
+    expected_count: int,
+    expected_project_version_id=None,
+) -> tuple[ProjectVersion, list[ProjectReadiness]]:
+    """Lock and revalidate authoritative readiness snapshots.
+
+    Shared participation lock order is exact ProjectVersion(s), users in UUID
+    order, profiles/skills in user order, then readiness rows in UUID order.
+    Callers that already own a Formation lock take that parent lock first.
+    """
+
+    normalized_ids = _normalized_formation_readiness_ids(
+        readiness_ids=readiness_ids,
+        expected_count=expected_count,
+    )
+    references = list(
+        ProjectReadiness.objects.filter(id__in=normalized_ids)
+        .order_by("id")
+        .values("id", "user_id", "project_version_id")
+    )
+    if len(references) != expected_count:
+        raise InvalidFormationReadiness
+    reference_user_ids = {item["id"]: item["user_id"] for item in references}
+
+    project_version_ids = {item["project_version_id"] for item in references}
+    if expected_project_version_id is not None:
+        project_version_ids.add(expected_project_version_id)
+    locked_versions = list(
+        ProjectVersion.objects.select_for_update(of=("self",))
+        .filter(id__in=project_version_ids)
+        .prefetch_related(
+            "role_requirements__allowed_stacks__technology_stack",
+            "role_requirements__role__compatible_stack_links__technology_stack",
+        )
+        .order_by("id")
+    )
+    reference_version_ids = {item["project_version_id"] for item in references}
+    if (
+        len(locked_versions) != len(project_version_ids)
+        or len(reference_version_ids) != 1
+    ):
+        raise InvalidFormationReadiness
+    reference_version_id = next(iter(reference_version_ids))
+    project_version = next(
+        (
+            version
+            for version in locked_versions
+            if version.id == reference_version_id
+        ),
+        None,
+    )
+    if (
+        project_version is None
+        or not project_version.is_published
+        or (
+            expected_project_version_id is not None
+            and project_version.id != expected_project_version_id
+        )
+    ):
+        raise InvalidFormationReadiness
+
+    user_ids = {item["user_id"] for item in references}
+    locked_users = list(
+        User.objects.select_for_update(of=("self",))
+        .filter(id__in=user_ids)
+        .order_by("id")
+    )
+    if len(locked_users) != expected_count or any(
+        not user.is_active for user in locked_users
+    ):
+        raise InvalidFormationMembers
+    profiles = _locked_formation_profiles(user_ids=user_ids)
+
+    readinesses = list(
+        ProjectReadiness.objects.select_for_update(of=("self",))
+        .select_related("role", "technology_stack")
+        .filter(id__in=normalized_ids)
+        .order_by("id")
+    )
+    if (
+        len(readinesses) != expected_count
+        or any(readiness.consumed_at is not None for readiness in readinesses)
+        or len({readiness.user_id for readiness in readinesses}) != expected_count
+        or any(
+            readiness.user_id != reference_user_ids[readiness.id]
+            for readiness in readinesses
+        )
+        or any(
+            readiness.project_version_id != project_version.id
+            for readiness in readinesses
+        )
+    ):
+        raise InvalidFormationReadiness
+
+    if current_unresolved_ready_checks().filter(
+        user_id__in=user_ids,
+    ).exists():
+        raise MemberHasUnresolvedFormation
+    if active_project_run_memberships().filter(
+        user_id__in=user_ids,
+    ).exists():
+        raise MemberHasActiveProjectRun
+
+    for readiness in readinesses:
+        profile = profiles[readiness.user_id]
+        if profile.selected_role_id != readiness.role_id:
+            raise InvalidFormationMembers
+        _validated_stack_for_readiness(
+            project_version=project_version,
+            readiness=readiness,
+            profile=profile,
+        )
+    return project_version, readinesses
+
+
+def _consume_locked_readinesses(*, readinesses) -> None:
+    readiness_ids = [readiness.id for readiness in readinesses]
+    updated = ProjectReadiness.objects.filter(
+        id__in=readiness_ids,
+        consumed_at__isnull=True,
+    ).update(consumed_at=timezone.now())
+    if updated != len(readiness_ids):
+        raise InvalidFormationReadiness
 
 
 @transaction.atomic
 def create_team_formation(
     *,
-    project_version: ProjectVersion,
     created_by: User,
-    members: list[ProposedMember],
+    readiness_ids,
     now=None,
 ) -> TeamFormation:
     now = now or timezone.now()
     if not created_by.is_active or not created_by.is_staff:
         raise InvalidFormationMembers
-    validate_member_roles(role_codes=(member.role.code for member in members))
-    if len({member.user.id for member in members}) != 3:
-        raise InvalidFormationMembers
-
-    project_version = (
-        ProjectVersion.objects.select_for_update()
-        .prefetch_related(
-            "role_requirements__allowed_stacks__technology_stack",
-            "role_requirements__role__compatible_stack_links__technology_stack",
-        )
-        .get(id=project_version.id)
+    project_version, readinesses = _locked_valid_formation_readinesses(
+        readiness_ids=readiness_ids,
+        expected_count=3,
     )
-    if not project_version.is_published:
-        raise InvalidFormationMembers
-    validated_members = [
-        (member, _validated_stack_for_member(project_version=project_version, member=member))
-        for member in members
-    ]
+    validate_member_roles(role_codes=(item.role.code for item in readinesses))
     formation = TeamFormation.objects.create(
         project_version=project_version,
         created_by=created_by,
@@ -168,16 +475,17 @@ def create_team_formation(
         [
             ReadyCheck(
                 formation=formation,
-                user=member.user,
-                role=member.role,
-                technology_stack=selected_stack,
+                user_id=readiness.user_id,
+                role_id=readiness.role_id,
+                technology_stack_id=readiness.technology_stack_id,
                 proposed_by=created_by,
                 started_at=now,
                 expires_at=now + READY_CHECK_DURATION,
             )
-            for member, selected_stack in validated_members
+            for readiness in readinesses
         ]
     )
+    _consume_locked_readinesses(readinesses=readinesses)
     return formation
 
 
@@ -463,8 +771,7 @@ def replace_ready_check_member(
     *,
     formation_id,
     ready_check_id,
-    replacement_user: User,
-    technology_stack,
+    replacement_readiness_id,
     proposed_by: User,
     now=None,
 ) -> ReadyCheck:
@@ -484,43 +791,27 @@ def replace_ready_check_member(
         current.save(update_fields=["status"])
     if current.status not in {ReadyCheckStatus.DECLINED, ReadyCheckStatus.EXPIRED}:
         raise ReadyCheckNotReplaceable
-    if replacement_user.id == current.user_id:
+    _, readinesses = _locked_valid_formation_readinesses(
+        readiness_ids=(replacement_readiness_id,),
+        expected_count=1,
+        expected_project_version_id=formation.project_version_id,
+    )
+    readiness = readinesses[0]
+    if readiness.user_id == current.user_id or readiness.role_id != current.role_id:
         raise InvalidFormationMembers
-    if ReadyCheck.objects.filter(
-        formation=formation,
-        user=replacement_user,
-        is_current=True,
-    ).exclude(id=current.id).exists():
-        raise InvalidFormationMembers
-
-    project_version = (
-        ProjectVersion.objects.select_for_update()
-        .prefetch_related(
-            "role_requirements__allowed_stacks__technology_stack",
-            "role_requirements__role__compatible_stack_links__technology_stack",
-        )
-        .get(id=formation.project_version_id)
-    )
-    member = ProposedMember(
-        user=replacement_user,
-        role=current.role,
-        technology_stack=technology_stack,
-    )
-    selected_stack = _validated_stack_for_member(
-        project_version=project_version,
-        member=member,
-    )
     current.is_current = False
     current.save(update_fields=["is_current"])
-    return ReadyCheck.objects.create(
+    replacement = ReadyCheck.objects.create(
         formation=formation,
-        user=replacement_user,
-        role=current.role,
-        technology_stack=selected_stack,
+        user_id=readiness.user_id,
+        role_id=readiness.role_id,
+        technology_stack_id=readiness.technology_stack_id,
         proposed_by=proposed_by,
         started_at=now,
         expires_at=now + READY_CHECK_DURATION,
     )
+    _consume_locked_readinesses(readinesses=readinesses)
+    return replacement
 
 
 def _locked_sprint_run(*, sprint_run_id, project_run_id=None):

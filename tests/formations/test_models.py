@@ -5,6 +5,8 @@ from django.db import IntegrityError, connection, transaction
 from django.utils import timezone
 
 from apps.formations.models import (
+    READY_CHECK_DURATION,
+    ProjectReadiness,
     ProjectRun,
     ReadyCheck,
     ReadyCheckStatus,
@@ -14,7 +16,6 @@ from apps.formations.models import (
 )
 from apps.formations.services import (
     confirm_ready_check,
-    create_team_formation,
     decline_ready_check,
     replace_ready_check_member,
 )
@@ -214,11 +215,16 @@ def test_database_preserves_historical_ready_check_snapshots(
         is_current=True,
     )
     decline_ready_check(ready_check_id=historical.id, user=historical.user)
+    readiness = ProjectReadiness.objects.create(
+        user=replacement_backend_user,
+        role=historical.role,
+        project_version=formation.project_version,
+        technology_stack=django_stack,
+    )
     replace_ready_check_member(
         formation_id=formation.id,
         ready_check_id=historical.id,
-        replacement_user=replacement_backend_user,
-        technology_stack=django_stack,
+        replacement_readiness_id=readiness.id,
         proposed_by=facilitator,
     )
 
@@ -291,14 +297,33 @@ def test_database_enforces_one_active_project_run_per_user(
     for ready_check in formation.ready_checks.order_by("role__code"):
         confirm_ready_check(ready_check_id=ready_check.id, user=ready_check.user)
     active_member = TeamMember.objects.select_related("role").first()
-    second_formation = create_team_formation(
-        project_version=helpdesk_version,
-        created_by=facilitator,
-        members=proposed_members,
-    )
     second_started_at = timezone.now()
 
     with pytest.raises(IntegrityError) as exc_info, transaction.atomic():
+        second_formation = TeamFormation.objects.create(
+            project_version=helpdesk_version,
+            created_by=facilitator,
+            created_at=second_started_at,
+            ready_confirmed_at=second_started_at,
+        )
+        ReadyCheck.objects.bulk_create(
+            [
+                ReadyCheck(
+                    formation=second_formation,
+                    user=readiness.user,
+                    role=readiness.role,
+                    technology_stack=readiness.technology_stack,
+                    proposed_by=facilitator,
+                    status=ReadyCheckStatus.CONFIRMED,
+                    started_at=second_started_at - timedelta(hours=1),
+                    expires_at=(
+                        second_started_at - timedelta(hours=1) + READY_CHECK_DURATION
+                    ),
+                    responded_at=second_started_at,
+                )
+                for readiness in proposed_members
+            ]
+        )
         second_team = Team.objects.create(formation=second_formation)
         second_run = ProjectRun.objects.create(
             team=second_team,

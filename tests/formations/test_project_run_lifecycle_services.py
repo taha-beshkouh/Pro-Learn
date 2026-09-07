@@ -12,7 +12,12 @@ from apps.formations.exceptions import (
     SprintDeadlinePassed,
     SprintTransitionNotAllowed,
 )
-from apps.formations.models import ProjectRun, ProjectRunState, SprintRunState
+from apps.formations.models import (
+    ProjectReadiness,
+    ProjectRun,
+    ProjectRunState,
+    SprintRunState,
+)
 from apps.formations.services import (
     complete_sprint,
     confirm_ready_check,
@@ -296,10 +301,18 @@ def test_terminal_run_releases_users_for_a_new_active_run(
         project_run_id=overdue_runtime_project_run.id,
         actor=facilitator,
     )
+    replacement_readinesses = [
+        ProjectReadiness.objects.create(
+            user=readiness.user,
+            role=readiness.role,
+            project_version=readiness.project_version,
+            technology_stack=readiness.technology_stack,
+        )
+        for readiness in proposed_members
+    ]
     formation = create_team_formation(
-        project_version=helpdesk_version,
         created_by=facilitator,
-        members=proposed_members,
+        readiness_ids=[readiness.id for readiness in replacement_readinesses],
     )
     for ready_check in formation.ready_checks.order_by("role__code"):
         confirm_ready_check(ready_check_id=ready_check.id, user=ready_check.user)

@@ -2,7 +2,23 @@ class FormationDomainError(Exception):
     pass
 
 
+class InvalidProjectReadinessSelection(FormationDomainError):
+    pass
+
+
+class ActiveProjectReadinessExists(FormationDomainError):
+    pass
+
+
+class MemberHasUnresolvedFormation(FormationDomainError):
+    pass
+
+
 class InvalidFormationMembers(FormationDomainError):
+    pass
+
+
+class InvalidFormationReadiness(FormationDomainError):
     pass
 
 

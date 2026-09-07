@@ -917,6 +917,97 @@ def test_stack_confirmation_blocks_guest_and_profile_role_conflict(
     assert "project_stack_selection" not in api_client.session
 
 
+def test_approved_role_conflict_uses_authoritative_new_role_for_stack_confirmation(
+    api_client,
+    user,
+    profile,
+    helpdesk_version,
+    backend_role,
+    frontend_role,
+    react_stack,
+):
+    profile.selected_role = backend_role
+    profile.save(update_fields=["selected_role"])
+    api_client.force_login(user)
+    return_path = f"/projects/{helpdesk_version.id}/stack-selection"
+    continuation = {
+        "selected_role_id": str(frontend_role.id),
+        "project_version_id": str(helpdesk_version.id),
+        "intended_action": "join_project",
+        "return_path": return_path,
+    }
+    session = api_client.session
+    session["participation_context"] = continuation
+    session.save()
+
+    approval = api_client.post(
+        "/api/v1/profile/select-role/",
+        {"role_id": str(frontend_role.id)},
+        format="json",
+    )
+    confirmation = api_client.post(
+        f"/api/v1/project-versions/{helpdesk_version.id}/stack-selection/",
+        {},
+        format="json",
+    )
+
+    assert approval.status_code == 200
+    assert approval.data["selected_role"]["id"] == str(frontend_role.id)
+    assert confirmation.status_code == 200
+    assert confirmation.data == {
+        "project_version_id": str(helpdesk_version.id),
+        "selected_role_id": str(frontend_role.id),
+        "selected_stack_id": str(react_stack.id),
+    }
+    assert api_client.session["participation_context"] == continuation
+
+
+def test_declined_role_conflict_clears_only_guest_role_and_uses_persisted_role(
+    api_client,
+    user,
+    profile,
+    helpdesk_version,
+    backend_role,
+    frontend_role,
+    django_stack,
+):
+    profile.selected_role = backend_role
+    profile.save(update_fields=["selected_role"])
+    api_client.force_login(user)
+    return_path = f"/projects/{helpdesk_version.id}/stack-selection"
+    session = api_client.session
+    session["participation_context"] = {
+        "selected_role_id": str(frontend_role.id),
+        "project_version_id": str(helpdesk_version.id),
+        "intended_action": "join_project",
+        "return_path": return_path,
+    }
+    session.save()
+
+    declined = api_client.patch(
+        "/api/v1/guest-context/",
+        {"selected_role_id": None},
+        format="json",
+    )
+    confirmation = api_client.post(
+        f"/api/v1/project-versions/{helpdesk_version.id}/stack-selection/",
+        {"technology_stack_id": str(django_stack.id)},
+        format="json",
+    )
+
+    assert declined.status_code == 200
+    assert declined.data == {
+        "project_version_id": str(helpdesk_version.id),
+        "intended_action": "join_project",
+        "return_path": return_path,
+    }
+    profile.refresh_from_db()
+    assert profile.selected_role_id == backend_role.id
+    assert confirmation.status_code == 200
+    assert confirmation.data["selected_role_id"] == str(backend_role.id)
+    assert confirmation.data["project_version_id"] == str(helpdesk_version.id)
+
+
 def test_stack_confirmation_blocks_a_different_continued_version(
     api_client,
     user,

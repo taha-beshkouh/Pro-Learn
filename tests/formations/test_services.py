@@ -8,12 +8,15 @@ from django.utils import timezone
 
 from apps.formations.exceptions import (
     InvalidFormationMembers,
+    InvalidFormationReadiness,
     MemberHasActiveProjectRun,
+    MemberHasUnresolvedFormation,
     ReadyCheckExpired,
     ReadyCheckNotPending,
     ReadyCheckNotReplaceable,
 )
 from apps.formations.models import (
+    ProjectReadiness,
     ProjectRun,
     ReadyCheck,
     ReadyCheckStatus,
@@ -23,7 +26,6 @@ from apps.formations.models import (
 )
 from apps.profiles.models import UserProfile, UserSkill
 from apps.formations.services import (
-    ProposedMember,
     confirm_ready_check,
     create_team_formation,
     decline_ready_check,
@@ -58,9 +60,8 @@ def test_create_formation_has_exact_roles_stacks_and_48_hour_ready_checks(
 ):
     now = timezone.now()
     formation = create_team_formation(
-        project_version=helpdesk_version,
         created_by=facilitator,
-        members=proposed_members,
+        readiness_ids=[readiness.id for readiness in proposed_members],
         now=now,
     )
 
@@ -81,21 +82,16 @@ def test_create_formation_has_exact_roles_stacks_and_48_hour_ready_checks(
     assert all(item.expires_at - item.started_at == timedelta(hours=48) for item in checks.values())
 
 
-def test_create_formation_rejects_duplicate_users(
+def test_create_formation_rejects_duplicate_readiness_ids(
     facilitator, helpdesk_version, proposed_members
 ):
-    members = list(proposed_members)
-    members[1] = ProposedMember(
-        user=members[0].user,
-        role=members[1].role,
-        technology_stack=members[1].technology_stack,
-    )
+    readiness_ids = [readiness.id for readiness in proposed_members]
+    readiness_ids[1] = readiness_ids[0]
 
-    with pytest.raises(InvalidFormationMembers):
+    with pytest.raises(InvalidFormationReadiness):
         create_team_formation(
-            project_version=helpdesk_version,
             created_by=facilitator,
-            members=members,
+            readiness_ids=readiness_ids,
         )
     assert TeamFormation.objects.count() == 0
 
@@ -111,11 +107,10 @@ def test_create_formation_rechecks_locked_project_version_publication(
         published_at=None
     )
 
-    with pytest.raises(InvalidFormationMembers):
+    with pytest.raises(InvalidFormationReadiness):
         create_team_formation(
-            project_version=helpdesk_version,
             created_by=facilitator,
-            members=proposed_members,
+            readiness_ids=[readiness.id for readiness in proposed_members],
         )
 
     assert TeamFormation.objects.count() == 0
@@ -200,7 +195,7 @@ def test_team_members_snapshot_role_and_selected_stack(
     ][1]
 
 
-def test_one_active_project_run_per_user_is_enforced_before_completion(
+def test_active_project_run_users_cannot_enter_a_new_formation(
     formation,
     facilitator,
     helpdesk_version,
@@ -209,26 +204,22 @@ def test_one_active_project_run_per_user_is_enforced_before_completion(
     for check in formation.ready_checks.order_by("role__code"):
         confirm_ready_check(ready_check_id=check.id, user=check.user)
 
-    second_formation = create_team_formation(
-        project_version=helpdesk_version,
-        created_by=facilitator,
-        members=proposed_members,
-    )
-    second_checks = list(second_formation.ready_checks.order_by("role__code"))
-    for check in second_checks[:2]:
-        confirm_ready_check(ready_check_id=check.id, user=check.user)
+    second_readinesses = [
+        ProjectReadiness.objects.create(
+            user=readiness.user,
+            role=readiness.role,
+            project_version=readiness.project_version,
+            technology_stack=readiness.technology_stack,
+        )
+        for readiness in proposed_members
+    ]
 
     with pytest.raises(MemberHasActiveProjectRun):
-        confirm_ready_check(
-            ready_check_id=second_checks[2].id,
-            user=second_checks[2].user,
+        create_team_formation(
+            created_by=facilitator,
+            readiness_ids=[readiness.id for readiness in second_readinesses],
         )
 
-    second_checks[2].refresh_from_db()
-    second_formation.refresh_from_db()
-    assert second_checks[2].status == ReadyCheckStatus.PENDING
-    assert second_formation.ready_confirmed_at is None
-    assert not Team.objects.filter(formation=second_formation).exists()
     assert Team.objects.count() == 1
     assert ProjectRun.objects.count() == 1
 
@@ -274,12 +265,17 @@ def test_replacement_preserves_role_and_other_members(
     )
     backend = formation.ready_checks.get(role__code="BACKEND_DEVELOPER", is_current=True)
     decline_ready_check(ready_check_id=backend.id, user=backend.user)
+    readiness = ProjectReadiness.objects.create(
+        user=replacement_backend_user,
+        role=backend.role,
+        project_version=formation.project_version,
+        technology_stack=django_stack,
+    )
 
     replacement = replace_ready_check_member(
         formation_id=formation.id,
         ready_check_id=backend.id,
-        replacement_user=replacement_backend_user,
-        technology_stack=django_stack,
+        replacement_readiness_id=readiness.id,
         proposed_by=facilitator,
     )
 
@@ -299,13 +295,18 @@ def test_pending_unexpired_member_cannot_be_replaced(
     formation, replacement_backend_user, django_stack, facilitator
 ):
     backend = formation.ready_checks.get(role__code="BACKEND_DEVELOPER", is_current=True)
+    readiness = ProjectReadiness.objects.create(
+        user=replacement_backend_user,
+        role=backend.role,
+        project_version=formation.project_version,
+        technology_stack=django_stack,
+    )
 
     with pytest.raises(ReadyCheckNotReplaceable):
         replace_ready_check_member(
             formation_id=formation.id,
             ready_check_id=backend.id,
-            replacement_user=replacement_backend_user,
-            technology_stack=django_stack,
+            replacement_readiness_id=readiness.id,
             proposed_by=facilitator,
             now=backend.expires_at - timedelta(seconds=1),
         )
@@ -315,12 +316,17 @@ def test_expired_member_can_be_replaced_in_the_same_role(
     formation, replacement_backend_user, django_stack, facilitator
 ):
     backend = formation.ready_checks.get(role__code="BACKEND_DEVELOPER", is_current=True)
+    readiness = ProjectReadiness.objects.create(
+        user=replacement_backend_user,
+        role=backend.role,
+        project_version=formation.project_version,
+        technology_stack=django_stack,
+    )
 
     replacement = replace_ready_check_member(
         formation_id=formation.id,
         ready_check_id=backend.id,
-        replacement_user=replacement_backend_user,
-        technology_stack=django_stack,
+        replacement_readiness_id=readiness.id,
         proposed_by=facilitator,
         now=backend.expires_at,
     )
@@ -337,13 +343,18 @@ def test_declined_member_cannot_replace_themselves(
 ):
     backend = formation.ready_checks.get(user=backend_user, is_current=True)
     decline_ready_check(ready_check_id=backend.id, user=backend_user)
+    readiness = ProjectReadiness.objects.create(
+        user=backend_user,
+        role=backend.role,
+        project_version=formation.project_version,
+        technology_stack=django_stack,
+    )
 
-    with pytest.raises(InvalidFormationMembers):
+    with pytest.raises(MemberHasUnresolvedFormation):
         replace_ready_check_member(
             formation_id=formation.id,
             ready_check_id=backend.id,
-            replacement_user=backend_user,
-            technology_stack=django_stack,
+            replacement_readiness_id=readiness.id,
             proposed_by=facilitator,
         )
 
@@ -411,50 +422,34 @@ def test_same_ready_check_cannot_be_confirmed_twice_concurrently(formation):
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.postgresql
-def test_concurrent_formations_cannot_create_two_active_runs_for_the_same_users(
+def test_concurrent_formations_cannot_consume_the_same_readinesses_twice(
     facilitator,
     helpdesk_version,
     proposed_members,
 ):
-    formations = [
-        create_team_formation(
-            project_version=helpdesk_version,
-            created_by=facilitator,
-            members=proposed_members,
-        )
-        for _ in range(2)
-    ]
-    final_checks = []
-    for candidate in formations:
-        checks = list(candidate.ready_checks.order_by("role__code"))
-        for check in checks[:2]:
-            confirm_ready_check(ready_check_id=check.id, user=check.user)
-        final_checks.append(checks[2])
-
     barrier = Barrier(2)
+    readiness_ids = [readiness.id for readiness in proposed_members]
 
-    def confirm_final(check_id, user_id):
+    def create_once():
         close_old_connections()
         try:
             barrier.wait(timeout=5)
-            check = ReadyCheck.objects.get(id=check_id, user_id=user_id)
+            actor = type(facilitator).objects.get(id=facilitator.id)
             try:
-                confirm_ready_check(ready_check_id=check.id, user=check.user)
-            except MemberHasActiveProjectRun:
-                return "active-run-rejected"
-            return "completed"
+                create_team_formation(
+                    created_by=actor,
+                    readiness_ids=readiness_ids,
+                )
+            except (InvalidFormationReadiness, MemberHasUnresolvedFormation):
+                return "rejected"
+            return "created"
         finally:
             close_old_connections()
 
     with ThreadPoolExecutor(max_workers=2) as executor:
-        results = list(
-            executor.map(
-                lambda args: confirm_final(*args),
-                [(check.id, check.user_id) for check in final_checks],
-            )
-        )
+        results = list(executor.map(lambda _: create_once(), range(2)))
 
-    assert sorted(results) == ["active-run-rejected", "completed"]
-    assert Team.objects.count() == 1
-    assert ProjectRun.objects.count() == 1
-    assert TeamMember.objects.filter(ended_at__isnull=True).count() == 3
+    assert sorted(results) == ["created", "rejected"]
+    assert TeamFormation.objects.count() == 1
+    assert ReadyCheck.objects.filter(is_current=True).count() == 3
+    assert ProjectReadiness.objects.filter(consumed_at__isnull=False).count() == 3

@@ -1,7 +1,7 @@
 import pytest
 
-from apps.formations.models import ReadyCheckStatus
-from apps.formations.services import confirm_ready_check, create_team_formation
+from apps.formations.models import ProjectReadiness, ReadyCheckStatus
+from apps.formations.services import confirm_ready_check
 
 
 pytestmark = pytest.mark.django_db
@@ -9,19 +9,7 @@ pytestmark = pytest.mark.django_db
 
 def formation_payload(helpdesk_version, proposed_members):
     return {
-        "project_version_id": str(helpdesk_version.id),
-        "members": [
-            {
-                "user_id": str(member.user.id),
-                "role_id": str(member.role.id),
-                **(
-                    {"technology_stack_id": str(member.technology_stack.id)}
-                    if member.technology_stack is not None
-                    else {}
-                ),
-            }
-            for member in proposed_members
-        ],
+        "readiness_ids": [str(readiness.id) for readiness in proposed_members],
     }
 
 
@@ -33,6 +21,9 @@ def test_only_staff_can_create_or_list_formations(
     proposed_members,
 ):
     payload = formation_payload(helpdesk_version, proposed_members)
+    assert api_client.post(
+        "/api/v1/team-formations/", payload, format="json"
+    ).status_code == 403
     api_client.force_login(backend_user)
     assert api_client.post("/api/v1/team-formations/", payload, format="json").status_code == 403
     assert api_client.get("/api/v1/team-formations/").status_code == 403
@@ -120,24 +111,31 @@ def test_active_project_run_conflict_returns_safe_response(
 ):
     for ready_check in formation.ready_checks.order_by("role__code"):
         confirm_ready_check(ready_check_id=ready_check.id, user=ready_check.user)
-    second_formation = create_team_formation(
-        project_version=helpdesk_version,
-        created_by=facilitator,
-        members=proposed_members,
-    )
-    second_checks = list(second_formation.ready_checks.order_by("role__code"))
-    for ready_check in second_checks[:2]:
-        confirm_ready_check(ready_check_id=ready_check.id, user=ready_check.user)
+    second_readinesses = [
+        ProjectReadiness.objects.create(
+            user=readiness.user,
+            role=readiness.role,
+            project_version=readiness.project_version,
+            technology_stack=readiness.technology_stack,
+        )
+        for readiness in proposed_members
+    ]
 
-    api_client.force_login(second_checks[2].user)
+    api_client.force_login(facilitator)
     response = api_client.post(
-        f"/api/v1/ready-checks/{second_checks[2].id}/confirm/"
+        "/api/v1/team-formations/",
+        {
+            "readiness_ids": [
+                str(readiness.id) for readiness in second_readinesses
+            ]
+        },
+        format="json",
     )
 
-    assert response.status_code == 400
-    assert response.data == {
-        "ready_check": ["A proposed member already has an active project run."]
-    }
+    assert response.status_code == 409
+    assert str(response.data["detail"]) == (
+        "A selected user already has an active ProjectRun."
+    )
     assert "constraint" not in str(response.data).lower()
 
 
@@ -156,10 +154,13 @@ def test_only_staff_can_replace_and_replacement_keeps_role(
         f"/api/v1/team-formations/{formation.id}/ready-checks/"
         f"{ready_check.id}/replace/"
     )
-    payload = {
-        "user_id": str(replacement_backend_user.id),
-        "technology_stack_id": str(django_stack.id),
-    }
+    readiness = ProjectReadiness.objects.create(
+        user=replacement_backend_user,
+        role=ready_check.role,
+        project_version=formation.project_version,
+        technology_stack=django_stack,
+    )
+    payload = {"readiness_id": str(readiness.id)}
     assert api_client.post(url, payload, format="json").status_code == 403
 
     api_client.force_login(facilitator)
@@ -178,15 +179,16 @@ def test_invalid_stack_is_rejected_without_internal_details(
     react_stack,
 ):
     payload = formation_payload(helpdesk_version, proposed_members)
-    payload["members"][0]["technology_stack_id"] = str(react_stack.id)
+    proposed_members[0].technology_stack = react_stack
+    proposed_members[0].save(update_fields=["technology_stack"])
     api_client.force_login(facilitator)
 
     response = api_client.post("/api/v1/team-formations/", payload, format="json")
 
     assert response.status_code == 400
     assert response.data == {
-        "technology_stack_id": [
-            "The selected stack is not valid for this project role."
+        "readiness_ids": [
+            "A readiness stack is not valid for its exact project role."
         ]
     }
     assert "constraint" not in str(response.data).lower()

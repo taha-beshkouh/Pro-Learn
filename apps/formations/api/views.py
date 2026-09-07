@@ -1,4 +1,6 @@
 from django.core.exceptions import ObjectDoesNotExist
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import csrf_protect
 from rest_framework import status
 from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 from rest_framework.permissions import IsAdminUser, IsAuthenticated
@@ -7,6 +9,7 @@ from rest_framework.views import APIView
 
 from apps.formations.api.exceptions import (
     FormationCannotStart,
+    ProjectReadinessConflict,
     ProjectRunConflict,
     SprintConflict,
 )
@@ -14,6 +17,8 @@ from apps.formations.api.serializers import (
     EmptyActionInputSerializer,
     MyReadyCheckSerializer,
     OpenSprintInputSerializer,
+    ProjectReadinessCandidateQuerySerializer,
+    ProjectReadinessSerializer,
     ProjectRunDashboardSerializer,
     ProjectRunLifecycleSerializer,
     ProjectRunWorkspaceSerializer,
@@ -26,11 +31,15 @@ from apps.formations.api.serializers import (
     TeamFormationSerializer,
 )
 from apps.formations.exceptions import (
+    ActiveProjectReadinessExists,
     FormationAlreadyReady,
     FormationCompletionConflict,
     InvalidFormationMembers,
+    InvalidFormationReadiness,
     InvalidFormationStack,
+    InvalidProjectReadinessSelection,
     MemberHasActiveProjectRun,
+    MemberHasUnresolvedFormation,
     ProjectRunDeadlineNotReached,
     ProjectRunTransitionNotAllowed,
     ReadyCheckExpired,
@@ -42,8 +51,16 @@ from apps.formations.exceptions import (
     SprintSubmissionNotAllowed,
     SprintTransitionNotAllowed,
 )
-from apps.formations.models import ProjectRun, ReadyCheck, SprintRun, TeamFormation
+from apps.formations.models import (
+    ProjectReadiness,
+    ProjectRun,
+    ReadyCheck,
+    SprintRun,
+    TeamFormation,
+)
 from apps.formations.selectors import (
+    active_project_readiness_candidates,
+    active_project_readiness_for_user,
     active_project_run_for_user,
     active_sprint_run_for_user,
     current_ready_checks_for_user,
@@ -52,34 +69,132 @@ from apps.formations.selectors import (
     ready_check_detail,
 )
 from apps.formations.services import (
-    ProposedMember,
     confirm_ready_check,
+    complete_sprint,
+    create_project_readiness,
     create_team_formation,
     decline_ready_check,
-    complete_sprint,
-    mark_sprint_under_review,
     mark_project_run_incomplete,
+    mark_sprint_under_review,
     open_sprint,
     replace_ready_check_member,
     request_sprint_changes,
     submit_sprint,
 )
-from apps.projects.exceptions import ProjectConfigurationError
 from apps.projects.api.exceptions import ProjectConfigurationUnavailable
+from apps.projects.exceptions import ProjectConfigurationError
+from apps.projects.models import ProjectVersion
 
 
-def _formation_error(exc):
+@method_decorator(csrf_protect, name="dispatch")
+class MyProjectReadinessView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            readiness = active_project_readiness_for_user(user=request.user)
+        except ProjectReadiness.DoesNotExist as exc:
+            raise NotFound("Active project readiness not found.") from exc
+        return Response(ProjectReadinessSerializer(readiness).data)
+
+    def post(self, request):
+        serializer = EmptyActionInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            readiness = create_project_readiness(
+                user=request.user,
+                session=request.session,
+            )
+        except InvalidProjectReadinessSelection as exc:
+            raise ValidationError(
+                {
+                    "readiness": [
+                        "A valid exact-version stack confirmation is required."
+                    ]
+                }
+            ) from exc
+        except ActiveProjectReadinessExists as exc:
+            raise ProjectReadinessConflict(
+                "The user already has an active project readiness."
+            ) from exc
+        except MemberHasUnresolvedFormation as exc:
+            raise ProjectReadinessConflict(
+                "The user is already in a current proposed formation."
+            ) from exc
+        except MemberHasActiveProjectRun as exc:
+            raise ProjectReadinessConflict(
+                "The user already has an active ProjectRun."
+            ) from exc
+        except ProjectConfigurationError as exc:
+            raise ProjectConfigurationUnavailable from exc
+        return Response(
+            ProjectReadinessSerializer(
+                active_project_readiness_for_user(user=readiness.user)
+            ).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+
+def _formation_error(exc, *, readiness_field="readiness_ids"):
+    if isinstance(exc, InvalidFormationReadiness):
+        return ValidationError(
+            {
+                readiness_field: [
+                    "Active readiness for the required exact ProjectVersion is required."
+                ]
+            }
+        )
     if isinstance(exc, InvalidFormationMembers):
         return ValidationError(
-            {"members": ["Members must be three unique active users with the required roles."]}
+            {
+                readiness_field: [
+                    "Readinesses must represent unique active users with the required roles."
+                ]
+            }
         )
     if isinstance(exc, InvalidFormationStack):
         return ValidationError(
-            {"technology_stack_id": ["The selected stack is not valid for this project role."]}
+            {
+                readiness_field: [
+                    "A readiness stack is not valid for its exact project role."
+                ]
+            }
+        )
+    if isinstance(exc, MemberHasUnresolvedFormation):
+        return FormationCannotStart(
+            "A selected user is already in a current proposed formation."
+        )
+    if isinstance(exc, MemberHasActiveProjectRun):
+        return FormationCannotStart(
+            "A selected user already has an active ProjectRun."
         )
     if isinstance(exc, ProjectConfigurationError):
         return ProjectConfigurationUnavailable()
     return None
+
+
+class ProjectReadinessCandidateListView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        serializer = ProjectReadinessCandidateQuerySerializer(
+            data=request.query_params
+        )
+        serializer.is_valid(raise_exception=True)
+        project_version_id = serializer.validated_data["project_version_id"]
+        if not ProjectVersion.objects.filter(
+            id=project_version_id,
+            published_at__isnull=False,
+        ).exists():
+            raise NotFound("Published project version not found.")
+        return Response(
+            ProjectReadinessSerializer(
+                active_project_readiness_candidates(
+                    project_version_id=project_version_id
+                ),
+                many=True,
+            ).data
+        )
 
 
 class TeamFormationListCreateView(APIView):
@@ -91,14 +206,19 @@ class TeamFormationListCreateView(APIView):
     def post(self, request):
         serializer = TeamFormationInputSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        members = [ProposedMember(**member) for member in serializer.validated_data["members"]]
         try:
             formation = create_team_formation(
-                project_version=serializer.validated_data["project_version"],
                 created_by=request.user,
-                members=members,
+                readiness_ids=serializer.validated_data["readiness_ids"],
             )
-        except (InvalidFormationMembers, InvalidFormationStack, ProjectConfigurationError) as exc:
+        except (
+            InvalidFormationMembers,
+            InvalidFormationReadiness,
+            InvalidFormationStack,
+            MemberHasActiveProjectRun,
+            MemberHasUnresolvedFormation,
+            ProjectConfigurationError,
+        ) as exc:
             raise _formation_error(exc) from exc
         return Response(
             TeamFormationSerializer(formation_detail(formation_id=formation.id)).data,
@@ -127,14 +247,20 @@ class ReplaceReadyCheckView(APIView):
             replacement = replace_ready_check_member(
                 formation_id=formation_id,
                 ready_check_id=ready_check_id,
-                replacement_user=serializer.validated_data["user"],
-                technology_stack=serializer.validated_data.get("technology_stack"),
+                replacement_readiness_id=serializer.validated_data["readiness_id"],
                 proposed_by=request.user,
             )
         except (ReadyCheck.DoesNotExist, TeamFormation.DoesNotExist) as exc:
             raise NotFound("Ready check not found.") from exc
-        except (InvalidFormationMembers, InvalidFormationStack, ProjectConfigurationError) as exc:
-            raise _formation_error(exc) from exc
+        except (
+            InvalidFormationMembers,
+            InvalidFormationReadiness,
+            InvalidFormationStack,
+            MemberHasActiveProjectRun,
+            MemberHasUnresolvedFormation,
+            ProjectConfigurationError,
+        ) as exc:
+            raise _formation_error(exc, readiness_field="readiness_id") from exc
         except ReadyCheckNotReplaceable as exc:
             raise ValidationError(
                 {"ready_check": ["Only a declined or expired slot can be replaced."]}

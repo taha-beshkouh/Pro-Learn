@@ -145,6 +145,10 @@ def authenticated_stack_selection_from_session(*, session: SessionBase) -> dict:
     return {key: value for key, value in selection.items() if key in allowed_keys}
 
 
+def clear_authenticated_stack_selection(*, session: SessionBase) -> None:
+    session.pop(AUTHENTICATED_STACK_SELECTION_SESSION_KEY, None)
+
+
 def store_authenticated_stack_selection(
     *,
     session: SessionBase,

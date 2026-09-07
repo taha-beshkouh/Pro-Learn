@@ -35,6 +35,53 @@ class ProjectRunState(models.TextChoices):
     INCOMPLETE = "INCOMPLETE", "Incomplete"
 
 
+class ProjectReadiness(models.Model):
+    """An authenticated user's active or historical pre-formation readiness."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="project_readinesses",
+    )
+    role = models.ForeignKey(
+        Role,
+        on_delete=models.PROTECT,
+        related_name="project_readinesses",
+    )
+    project_version = models.ForeignKey(
+        ProjectVersion,
+        on_delete=models.PROTECT,
+        related_name="project_readinesses",
+    )
+    technology_stack = models.ForeignKey(
+        TechnologyStack,
+        on_delete=models.PROTECT,
+        related_name="project_readinesses",
+        null=True,
+        blank=True,
+    )
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+    consumed_at = models.DateTimeField(null=True, blank=True, editable=False)
+
+    class Meta:
+        ordering = ["-created_at", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user"],
+                condition=Q(consumed_at__isnull=True),
+                name="formations_active_readiness_user_unique",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(consumed_at__isnull=True)
+                    | Q(consumed_at__gte=F("created_at"))
+                ),
+                name="formations_readiness_consumed_after_created",
+            ),
+        ]
+
+
 class TeamFormation(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     project_version = models.ForeignKey(

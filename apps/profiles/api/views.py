@@ -7,6 +7,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.formations.eligibility import ParticipationBlocker
 from apps.profiles.api.serializers import (
     GuestContextUpdateSerializer,
     ProfileLinkInputSerializer,
@@ -28,8 +29,8 @@ from apps.profiles.selectors import (
     technology_stack_list,
 )
 from apps.profiles.services import (
-    RoleAlreadySelected,
     ProfileLinkAlreadyRegistered,
+    RoleChangeBlocked,
     SkillAlreadyRegistered,
     add_user_skill,
     clear_guest_context,
@@ -42,6 +43,20 @@ from apps.profiles.services import (
     update_profile,
     update_profile_link,
 )
+from apps.projects.services import clear_authenticated_stack_selection
+
+
+ROLE_CHANGE_BLOCKER_MESSAGES = {
+    ParticipationBlocker.ACTIVE_READINESS: (
+        "An active project readiness prevents changing the role."
+    ),
+    ParticipationBlocker.CURRENT_FORMATION_OR_READY_CHECK: (
+        "A current Formation or Ready Check prevents changing the role."
+    ),
+    ParticipationBlocker.ACTIVE_PROJECT_RUN: (
+        "An active ProjectRun prevents changing the role."
+    ),
+}
 
 
 def current_profile_or_404(user):
@@ -89,15 +104,26 @@ class SelectRoleView(APIView):
     def post(self, request):
         serializer = RoleSelectionSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        profile = current_profile_or_404(request.user)
+        previous_role_id = profile.selected_role_id
         try:
-            select_profile_role(user=request.user, role=serializer.validated_data["role"])
+            selected_profile = select_profile_role(
+                user=request.user,
+                role=serializer.validated_data["role"],
+            )
         except UserProfile.DoesNotExist as exc:
             raise NotFound("Profile not found.") from exc
-        except RoleAlreadySelected as exc:
-            raise ValidationError(
-                {"role_id": ["The platform role has already been selected."]},
-                code="role_already_selected",
-            ) from exc
+        except RoleChangeBlocked as exc:
+            return Response(
+                {
+                    "detail": ROLE_CHANGE_BLOCKER_MESSAGES[exc.reason],
+                    "code": "role_change_blocked",
+                    "reason": exc.reason.value,
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+        if previous_role_id != selected_profile.selected_role_id:
+            clear_authenticated_stack_selection(session=request.session)
         return Response(UserProfileSerializer(profile_for_user(user=request.user)).data)
 
 
