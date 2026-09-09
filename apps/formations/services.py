@@ -29,7 +29,6 @@ from apps.formations.exceptions import (
     SprintAccessDenied,
     SprintDeadlinePassed,
     SprintRuntimeConfigurationError,
-    SprintSubmissionNotAllowed,
     SprintTransitionNotAllowed,
 )
 from apps.formations.models import (
@@ -507,7 +506,6 @@ def submission_deadline_passed(*, now, deadline_at) -> bool:
 def sprint_next_action(
     *,
     state: str | None,
-    is_designated_submitter: bool,
     has_sprints: bool = True,
 ) -> str:
     if state is None:
@@ -515,11 +513,11 @@ def sprint_next_action(
     if state == SprintRunState.LOCKED:
         return "WAIT_FOR_FACILITATOR"
     if state == SprintRunState.ACTIVE:
-        return "SUBMIT_SPRINT" if is_designated_submitter else "COLLABORATE"
+        return "SUBMIT_SPRINT"
     if state in {SprintRunState.SUBMITTED, SprintRunState.UNDER_REVIEW}:
         return "WAIT_FOR_REVIEW"
     if state == SprintRunState.CHANGES_REQUESTED:
-        return "RESUBMIT_SPRINT" if is_designated_submitter else "ADDRESS_CHANGES"
+        return "RESUBMIT_SPRINT"
     return "SPRINTS_COMPLETED"
 
 
@@ -844,7 +842,6 @@ def _require_active_staff(*, actor: User) -> None:
 def open_sprint(
     *,
     sprint_run_id,
-    designated_submitter_id,
     actor: User,
     project_run_id=None,
     now=None,
@@ -864,20 +861,9 @@ def open_sprint(
         sprint_template__sequence__lt=sprint_run.sprint_template.sequence,
     ).exclude(state=SprintRunState.COMPLETED).exists():
         raise SprintTransitionNotAllowed
-    try:
-        designated_submitter = TeamMember.objects.select_for_update(of=("self",)).get(
-            id=designated_submitter_id,
-            project_run=project_run,
-            ended_at__isnull=True,
-        )
-    except TeamMember.DoesNotExist as exc:
-        raise SprintSubmissionNotAllowed from exc
     sprint_run.state = SprintRunState.ACTIVE
-    sprint_run.designated_submitter = designated_submitter
     sprint_run.opened_at = now
-    sprint_run.save(
-        update_fields=["state", "designated_submitter", "opened_at", "updated_at"]
-    )
+    sprint_run.save(update_fields=["state", "opened_at", "updated_at"])
     return sprint_run
 
 
@@ -905,8 +891,6 @@ def submit_sprint(
         )
     except TeamMember.DoesNotExist as exc:
         raise SprintAccessDenied from exc
-    if sprint_run.designated_submitter_id != member.id:
-        raise SprintSubmissionNotAllowed
     if submission_deadline_passed(now=now, deadline_at=project_run.deadline_at):
         raise SprintDeadlinePassed
     validate_sprint_transition(

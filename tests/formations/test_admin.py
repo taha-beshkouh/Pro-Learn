@@ -308,7 +308,6 @@ def test_sprint_admin_actions_use_the_validated_service_flow(
 
     open_sprint(
         sprint_run_id=sprint_run.id,
-        designated_submitter_id=submitter.id,
         actor=admin_user,
     )
     submit_sprint(

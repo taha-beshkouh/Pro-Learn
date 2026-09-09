@@ -26,7 +26,7 @@ class ReadOnlyAdmin(admin.ModelAdmin):
         return tuple(field.name for field in self.model._meta.fields)
 
     def has_add_permission(self, request):
-        return False
+        return True
 
     def has_change_permission(self, request, obj=None):
         return False
@@ -37,6 +37,9 @@ class ReadOnlyAdmin(admin.ModelAdmin):
 
 class ActionOnlyAdmin(ReadOnlyAdmin):
     """Allow service-backed changelist actions but no object form mutation."""
+
+    def has_add_permission(self, request):
+        return False
 
     def has_change_permission(self, request, obj=None):
         if obj is not None:

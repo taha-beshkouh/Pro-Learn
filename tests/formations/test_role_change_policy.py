@@ -220,7 +220,6 @@ def test_completed_project_run_does_not_block_role_change(
     ):
         open_sprint(
             sprint_run_id=sprint_run.id,
-            designated_submitter_id=submitter.id,
             actor=facilitator,
             now=transition_at,
         )

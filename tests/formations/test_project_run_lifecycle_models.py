@@ -32,7 +32,6 @@ def _ordered_sprints(project_run):
 def _complete_sprint(*, sprint_run, member, facilitator, now):
     open_sprint(
         sprint_run_id=sprint_run.id,
-        designated_submitter_id=member.id,
         actor=facilitator,
         now=now,
     )
@@ -98,7 +97,6 @@ def test_database_submission_trigger_rejects_overdue_history(
     backend = overdue_runtime_members["BACKEND_DEVELOPER"]
     open_sprint(
         sprint_run_id=first.id,
-        designated_submitter_id=backend.id,
         actor=facilitator,
     )
 
@@ -132,7 +130,6 @@ def test_database_requires_final_sprint_and_run_completion_in_same_transaction(
     )
     open_sprint(
         sprint_run_id=final.id,
-        designated_submitter_id=backend.id,
         actor=facilitator,
         now=now,
     )
@@ -164,7 +161,6 @@ def test_database_blocks_sprint_state_changes_after_terminal_run(
     backend = overdue_runtime_members["BACKEND_DEVELOPER"]
     open_sprint(
         sprint_run_id=first.id,
-        designated_submitter_id=backend.id,
         actor=facilitator,
     )
     mark_project_run_incomplete(

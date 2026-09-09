@@ -40,7 +40,6 @@ def _ordered_sprints(project_run):
 def _complete_sprint(*, sprint_run, member, facilitator, now):
     open_sprint(
         sprint_run_id=sprint_run.id,
-        designated_submitter_id=member.id,
         actor=facilitator,
         now=now,
     )
@@ -83,7 +82,6 @@ def test_submission_at_deadline_is_rejected_without_history(
     backend = runtime_members["BACKEND_DEVELOPER"]
     open_sprint(
         sprint_run_id=first.id,
-        designated_submitter_id=backend.id,
         actor=facilitator,
         now=runtime_project_run.deadline_at - timedelta(days=1),
     )
@@ -111,7 +109,6 @@ def test_pre_deadline_submission_can_be_reviewed_after_deadline(
     after_deadline = runtime_project_run.deadline_at + timedelta(hours=1)
     open_sprint(
         sprint_run_id=first.id,
-        designated_submitter_id=backend.id,
         actor=facilitator,
         now=before_deadline,
     )
@@ -149,7 +146,6 @@ def test_resubmission_after_deadline_is_rejected_in_same_sprint(
     after_deadline = runtime_project_run.deadline_at + timedelta(seconds=1)
     open_sprint(
         sprint_run_id=first.id,
-        designated_submitter_id=backend.id,
         actor=facilitator,
         now=before_deadline,
     )
@@ -210,7 +206,6 @@ def test_highest_sequence_sprint_completion_atomically_completes_run(
 
     open_sprint(
         sprint_run_id=final.id,
-        designated_submitter_id=backend.id,
         actor=facilitator,
         now=transition_at,
     )
@@ -267,7 +262,6 @@ def test_manual_incomplete_is_staff_only_after_deadline_and_blocks_runtime(
     with pytest.raises(SprintTransitionNotAllowed):
         open_sprint(
             sprint_run_id=first.id,
-            designated_submitter_id=backend.id,
             actor=facilitator,
         )
 
@@ -377,7 +371,6 @@ def test_concurrent_final_completion_completes_project_run_once(
     )
     open_sprint(
         sprint_run_id=final.id,
-        designated_submitter_id=backend.id,
         actor=facilitator,
         now=transition_at,
     )

@@ -162,7 +162,7 @@ def test_normal_member_cannot_perform_management_transition(
     first = _ordered_sprints(runtime_project_run)[0]
     api_client.force_login(backend.user)
     if payload is None:
-        payload = {"designated_submitter_id": str(backend.id)}
+        payload = {}
 
     response = api_client.post(
         _action_url(runtime_project_run, first, action),
@@ -173,7 +173,7 @@ def test_normal_member_cannot_perform_management_transition(
     assert response.status_code == 403
 
 
-def test_staff_opens_sprint_and_designated_member_submits_without_approval(
+def test_staff_opens_sprint_without_designation_and_current_member_submits(
     api_client,
     runtime_project_run,
     runtime_members,
@@ -185,21 +185,28 @@ def test_staff_opens_sprint_and_designated_member_submits_without_approval(
     api_client.force_login(facilitator)
     opened = api_client.post(
         _action_url(runtime_project_run, first, "open"),
-        {"designated_submitter_id": str(backend.id)},
+        {},
         format="json",
     )
     assert opened.status_code == 200
     assert opened.data["state"] == SprintRunState.ACTIVE
+    assert opened.data["designated_submitter"] is None
 
     api_client.force_login(frontend.user)
-    rejected = api_client.post(
+    dashboard = api_client.get("/api/v1/project-runs/me/dashboard/")
+    assert dashboard.status_code == 200
+    assert dashboard.data["next_action"] == "SUBMIT_SPRINT"
+
+    spoofed = api_client.post(
         _action_url(runtime_project_run, first, "submit"),
-        {"evidence": "Wrong submitter"},
+        {
+            "evidence": "Spoofed actor",
+            "submitted_by": str(backend.id),
+        },
         format="json",
     )
-    assert rejected.status_code == 403
+    assert spoofed.status_code == 400
 
-    api_client.force_login(backend.user)
     submitted = api_client.post(
         _action_url(runtime_project_run, first, "submit"),
         {"evidence": "Manual evidence"},
@@ -211,6 +218,38 @@ def test_staff_opens_sprint_and_designated_member_submits_without_approval(
     first.refresh_from_db()
     assert first.completed_at is None
     assert first.submissions.count() == 1
+    assert first.submissions.get().submitted_by_id == frontend.id
+
+    submitted_dashboard = api_client.get("/api/v1/project-runs/me/dashboard/")
+    assert submitted_dashboard.status_code == 200
+    assert submitted_dashboard.data["next_action"] == "WAIT_FOR_REVIEW"
+
+
+def test_staff_open_rejects_legacy_designation_input_and_anonymous_access(
+    api_client,
+    runtime_project_run,
+    runtime_members,
+    facilitator,
+):
+    first = _ordered_sprints(runtime_project_run)[0]
+    backend = runtime_members["BACKEND_DEVELOPER"]
+    url = _action_url(runtime_project_run, first, "open")
+
+    api_client.force_login(facilitator)
+    legacy = api_client.post(
+        url,
+        {"designated_submitter_id": str(backend.id)},
+        format="json",
+    )
+    assert legacy.status_code == 400
+
+    api_client.logout()
+    anonymous = api_client.post(url, {}, format="json")
+    assert anonymous.status_code == 403
+
+    first.refresh_from_db()
+    assert first.state == SprintRunState.LOCKED
+    assert first.designated_submitter_id is None
 
 
 def test_review_changes_resubmission_and_completion_use_same_sprint(
@@ -220,11 +259,12 @@ def test_review_changes_resubmission_and_completion_use_same_sprint(
     facilitator,
 ):
     backend = runtime_members["BACKEND_DEVELOPER"]
+    frontend = runtime_members["FRONTEND_DEVELOPER"]
     first = _ordered_sprints(runtime_project_run)[0]
     api_client.force_login(facilitator)
     api_client.post(
         _action_url(runtime_project_run, first, "open"),
-        {"designated_submitter_id": str(backend.id)},
+        {},
         format="json",
     )
     api_client.force_login(backend.user)
@@ -245,7 +285,7 @@ def test_review_changes_resubmission_and_completion_use_same_sprint(
     assert under_review.data["state"] == SprintRunState.UNDER_REVIEW
     assert changes.data["state"] == SprintRunState.CHANGES_REQUESTED
 
-    api_client.force_login(backend.user)
+    api_client.force_login(frontend.user)
     resubmitted = api_client.post(
         _action_url(runtime_project_run, first, "submit"),
         {"evidence": "Version two"},
@@ -270,6 +310,9 @@ def test_review_changes_resubmission_and_completion_use_same_sprint(
         "Version one",
         "Version two",
     ]
+    assert [
+        item["submitted_by"]["id"] for item in detail.data["submissions"]
+    ] == [str(backend.id), str(frontend.id)]
 
 
 def test_invalid_api_transition_returns_conflict(
@@ -298,7 +341,7 @@ def test_overdue_submission_is_conflict_and_client_time_cannot_bypass_cutoff(
     api_client.force_login(facilitator)
     opened = api_client.post(
         _action_url(overdue_runtime_project_run, first, "open"),
-        {"designated_submitter_id": str(backend.id)},
+        {},
         format="json",
     )
     assert opened.status_code == 200

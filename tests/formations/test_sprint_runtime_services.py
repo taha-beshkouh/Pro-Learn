@@ -3,23 +3,30 @@ from datetime import timedelta
 from threading import Barrier
 
 import pytest
-from django.db import close_old_connections
+from django.db import close_old_connections, transaction
 from django.utils import timezone
 
 from apps.formations.exceptions import (
     SprintAccessDenied,
-    SprintSubmissionNotAllowed,
     SprintTransitionNotAllowed,
 )
-from apps.formations.models import SprintRunState, SprintSubmission
+from apps.formations.models import (
+    ProjectReadiness,
+    ProjectRun,
+    SprintRunState,
+    SprintSubmission,
+)
 from apps.formations.services import (
     complete_sprint,
+    confirm_ready_check,
+    create_team_formation,
     initialize_sprint_runs,
     mark_sprint_under_review,
     open_sprint,
     request_sprint_changes,
     submit_sprint,
 )
+from apps.profiles.models import UserProfile
 
 
 pytestmark = [pytest.mark.django_db, pytest.mark.postgresql]
@@ -29,10 +36,40 @@ def _ordered_sprints(project_run):
     return list(project_run.sprint_runs.order_by("sprint_template__sequence"))
 
 
+def _create_other_project_run(
+    *,
+    django_user_model,
+    project_run,
+    runtime_members,
+    facilitator,
+):
+    readinesses = []
+    for member in runtime_members.values():
+        user = django_user_model.objects.create_user(
+            email=f"other-{member.role.code.lower()}@example.com"
+        )
+        UserProfile.objects.create(user=user, selected_role=member.role)
+        readinesses.append(
+            ProjectReadiness.objects.create(
+                user=user,
+                role=member.role,
+                project_version=project_run.project_version,
+                technology_stack=member.technology_stack,
+            )
+        )
+
+    formation = create_team_formation(
+        created_by=facilitator,
+        readiness_ids=[readiness.id for readiness in readinesses],
+    )
+    for ready_check in formation.ready_checks.order_by("role__code"):
+        confirm_ready_check(ready_check_id=ready_check.id, user=ready_check.user)
+    return ProjectRun.objects.get(team__formation=formation)
+
+
 def _complete_sprint(*, sprint_run, member, facilitator, now=None):
     open_sprint(
         sprint_run_id=sprint_run.id,
-        designated_submitter_id=member.id,
         actor=facilitator,
         now=now,
     )
@@ -78,21 +115,17 @@ def test_project_run_initializes_locked_sprints_with_fixed_schedule(
 
 def test_next_sprint_cannot_open_until_previous_is_completed(
     runtime_project_run,
-    runtime_members,
     facilitator,
 ):
     first, second, _ = _ordered_sprints(runtime_project_run)
-    backend = runtime_members["BACKEND_DEVELOPER"]
     open_sprint(
         sprint_run_id=first.id,
-        designated_submitter_id=backend.id,
         actor=facilitator,
     )
 
     with pytest.raises(SprintTransitionNotAllowed):
         open_sprint(
             sprint_run_id=second.id,
-            designated_submitter_id=backend.id,
             actor=facilitator,
         )
 
@@ -104,9 +137,9 @@ def test_submission_review_changes_resubmission_and_completion_flow(
 ):
     first = _ordered_sprints(runtime_project_run)[0]
     backend = runtime_members["BACKEND_DEVELOPER"]
+    frontend = runtime_members["FRONTEND_DEVELOPER"]
     open_sprint(
         sprint_run_id=first.id,
-        designated_submitter_id=backend.id,
         actor=facilitator,
     )
 
@@ -121,23 +154,25 @@ def test_submission_review_changes_resubmission_and_completion_flow(
     request_sprint_changes(sprint_run_id=first.id, actor=facilitator)
     resubmitted, second_submission = submit_sprint(
         sprint_run_id=first.id,
-        user=backend.user,
+        user=frontend.user,
         evidence="Version two",
     )
     assert resubmitted.id == first.id
     assert first_submission.id != second_submission.id
+    assert first_submission.submitted_by_id == backend.id
+    assert second_submission.submitted_by_id == frontend.id
     assert list(
         SprintSubmission.objects.filter(sprint_run=first).values_list(
-            "evidence", flat=True
+            "submitted_by_id", "evidence"
         )
-    ) == ["Version one", "Version two"]
+    ) == [(backend.id, "Version one"), (frontend.id, "Version two")]
     mark_sprint_under_review(sprint_run_id=first.id, actor=facilitator)
     completed = complete_sprint(sprint_run_id=first.id, actor=facilitator)
     assert completed.state == SprintRunState.COMPLETED
     assert completed.completed_at is not None
 
 
-def test_only_staff_manage_and_only_designated_current_member_submits(
+def test_only_staff_manage_and_only_current_members_submit(
     runtime_project_run,
     runtime_members,
     facilitator,
@@ -150,22 +185,71 @@ def test_only_staff_manage_and_only_designated_current_member_submits(
     with pytest.raises(SprintAccessDenied):
         open_sprint(
             sprint_run_id=first.id,
-            designated_submitter_id=backend.id,
             actor=backend.user,
         )
     open_sprint(
         sprint_run_id=first.id,
-        designated_submitter_id=backend.id,
         actor=facilitator,
     )
-    with pytest.raises(SprintSubmissionNotAllowed):
-        submit_sprint(sprint_run_id=first.id, user=frontend.user)
     with pytest.raises(SprintAccessDenied):
         submit_sprint(sprint_run_id=first.id, user=outside_user)
+    submitted, submission = submit_sprint(sprint_run_id=first.id, user=frontend.user)
+    assert submitted.state == SprintRunState.SUBMITTED
+    assert submission.submitted_by_id == frontend.id
+
+
+@pytest.mark.parametrize(
+    "role_code",
+    ["BACKEND_DEVELOPER", "FRONTEND_DEVELOPER", "PRODUCT_DESIGNER"],
+)
+def test_each_current_team_member_can_submit_without_designation(
+    runtime_project_run,
+    runtime_members,
+    facilitator,
+    role_code,
+):
+    first = _ordered_sprints(runtime_project_run)[0]
+    member = runtime_members[role_code]
+
+    opened = open_sprint(sprint_run_id=first.id, actor=facilitator)
+    submitted, submission = submit_sprint(
+        sprint_run_id=first.id,
+        user=member.user,
+        evidence=f"Evidence from {role_code}",
+    )
+
+    assert opened.designated_submitter_id is None
+    assert submitted.state == SprintRunState.SUBMITTED
+    assert submission.submitted_by_id == member.id
+
+
+def test_member_of_another_project_run_cannot_submit(
+    django_user_model,
+    runtime_project_run,
+    runtime_members,
+    facilitator,
+):
+    first = _ordered_sprints(runtime_project_run)[0]
+    other_run = _create_other_project_run(
+        django_user_model=django_user_model,
+        project_run=runtime_project_run,
+        runtime_members=runtime_members,
+        facilitator=facilitator,
+    )
+    other_member = other_run.members.select_related("user").order_by("id").first()
+    assert other_member is not None
+    open_sprint(sprint_run_id=first.id, actor=facilitator)
+
+    with pytest.raises(SprintAccessDenied):
+        submit_sprint(sprint_run_id=first.id, user=other_member.user)
+
+    first.refresh_from_db()
+    assert first.state == SprintRunState.ACTIVE
+    assert first.submissions.count() == 0
 
 
 @pytest.mark.django_db(transaction=True)
-def test_inactive_designated_member_cannot_submit(
+def test_inactive_current_member_cannot_submit(
     runtime_project_run,
     runtime_members,
     facilitator,
@@ -174,7 +258,6 @@ def test_inactive_designated_member_cannot_submit(
     backend = runtime_members["BACKEND_DEVELOPER"]
     open_sprint(
         sprint_run_id=first.id,
-        designated_submitter_id=backend.id,
         actor=facilitator,
     )
     backend.user.is_active = False
@@ -184,6 +267,26 @@ def test_inactive_designated_member_cannot_submit(
         submit_sprint(sprint_run_id=first.id, user=backend.user)
 
     first.refresh_from_db()
+    assert first.state == SprintRunState.ACTIVE
+    assert first.submissions.count() == 0
+
+
+def test_ended_team_member_cannot_submit(
+    runtime_project_run,
+    runtime_members,
+    facilitator,
+):
+    first = _ordered_sprints(runtime_project_run)[0]
+    backend = runtime_members["BACKEND_DEVELOPER"]
+    open_sprint(sprint_run_id=first.id, actor=facilitator)
+
+    with pytest.raises(SprintAccessDenied), transaction.atomic():
+        type(backend).objects.filter(id=backend.id).update(ended_at=timezone.now())
+        submit_sprint(sprint_run_id=first.id, user=backend.user)
+
+    first.refresh_from_db()
+    backend.refresh_from_db()
+    assert backend.ended_at is None
     assert first.state == SprintRunState.ACTIVE
     assert first.submissions.count() == 0
 
@@ -208,7 +311,6 @@ def test_early_or_late_completion_does_not_move_future_schedule(
     )
     open_sprint(
         sprint_run_id=second.id,
-        designated_submitter_id=backend.id,
         actor=facilitator,
         now=early,
     )
@@ -218,7 +320,6 @@ def test_early_or_late_completion_does_not_move_future_schedule(
     complete_sprint(sprint_run_id=second.id, actor=facilitator, now=late)
     open_sprint(
         sprint_run_id=third.id,
-        designated_submitter_id=backend.id,
         actor=facilitator,
         now=late,
     )
@@ -234,30 +335,30 @@ def test_early_or_late_completion_does_not_move_future_schedule(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_concurrent_duplicate_submission_creates_one_history_row(
+def test_concurrent_submission_by_two_current_members_creates_one_history_row(
     runtime_project_run,
     runtime_members,
     facilitator,
 ):
     first = _ordered_sprints(runtime_project_run)[0]
     backend = runtime_members["BACKEND_DEVELOPER"]
+    frontend = runtime_members["FRONTEND_DEVELOPER"]
     open_sprint(
         sprint_run_id=first.id,
-        designated_submitter_id=backend.id,
         actor=facilitator,
     )
     barrier = Barrier(2)
 
-    def submit_once():
+    def submit_once(user_id):
         close_old_connections()
         try:
             barrier.wait(timeout=5)
-            user = type(backend.user).objects.get(id=backend.user_id)
+            user = type(backend.user).objects.get(id=user_id)
             try:
                 submit_sprint(
                     sprint_run_id=first.id,
                     user=user,
-                    evidence="Concurrent evidence",
+                    evidence=f"Concurrent evidence from {user_id}",
                 )
             except SprintTransitionNotAllowed:
                 return "rejected"
@@ -266,7 +367,9 @@ def test_concurrent_duplicate_submission_creates_one_history_row(
             close_old_connections()
 
     with ThreadPoolExecutor(max_workers=2) as executor:
-        results = list(executor.map(lambda _: submit_once(), range(2)))
+        results = list(executor.map(submit_once, (backend.user_id, frontend.user_id)))
 
     assert sorted(results) == ["rejected", "submitted"]
-    assert SprintSubmission.objects.filter(sprint_run=first).count() == 1
+    submissions = SprintSubmission.objects.filter(sprint_run=first)
+    assert submissions.count() == 1
+    assert submissions.get().submitted_by_id in {backend.id, frontend.id}

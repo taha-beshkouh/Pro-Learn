@@ -153,10 +153,7 @@ class MyReadyCheckSerializer(ReadyCheckSerializer):
 
 
 class OpenSprintInputSerializer(StrictFieldsSerializer):
-    designated_submitter_id = serializers.PrimaryKeyRelatedField(
-        source="designated_submitter",
-        queryset=TeamMember.objects.filter(ended_at__isnull=True),
-    )
+    pass
 
 
 class SprintSubmissionInputSerializer(StrictFieldsSerializer):
@@ -292,10 +289,6 @@ class ProjectRunDashboardSerializer(serializers.ModelSerializer):
         current = _current_sprint(obj)
         return sprint_next_action(
             state=current.state if current is not None else None,
-            is_designated_submitter=(
-                current is not None
-                and current.designated_submitter_id == obj.requesting_member.id
-            ),
             has_sprints=bool(obj.sprint_runs.all()),
         )
 

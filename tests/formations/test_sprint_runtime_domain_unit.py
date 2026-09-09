@@ -41,26 +41,18 @@ def test_unaccepted_sprint_transitions_are_rejected(current_state, target_state)
         )
 
 
-def test_next_action_is_member_and_state_aware():
-    assert sprint_next_action(
-        state=SprintRunState.ACTIVE,
-        is_designated_submitter=True,
-    ) == "SUBMIT_SPRINT"
-    assert sprint_next_action(
-        state=SprintRunState.ACTIVE,
-        is_designated_submitter=False,
-    ) == "COLLABORATE"
-    assert sprint_next_action(
-        state=SprintRunState.UNDER_REVIEW,
-        is_designated_submitter=True,
-    ) == "WAIT_FOR_REVIEW"
+def test_next_action_is_sprint_state_aware():
+    assert sprint_next_action(state=SprintRunState.ACTIVE) == "SUBMIT_SPRINT"
+    assert (
+        sprint_next_action(state=SprintRunState.CHANGES_REQUESTED)
+        == "RESUBMIT_SPRINT"
+    )
+    assert (
+        sprint_next_action(state=SprintRunState.UNDER_REVIEW) == "WAIT_FOR_REVIEW"
+    )
+    assert sprint_next_action(state=None) == "SPRINTS_COMPLETED"
     assert sprint_next_action(
         state=None,
-        is_designated_submitter=False,
-    ) == "SPRINTS_COMPLETED"
-    assert sprint_next_action(
-        state=None,
-        is_designated_submitter=False,
         has_sprints=False,
     ) == "NO_SPRINT_AVAILABLE"
 

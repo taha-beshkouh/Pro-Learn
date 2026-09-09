@@ -282,7 +282,6 @@ class SprintRun(models.Model):
                 condition=(
                     Q(
                         state=SprintRunState.LOCKED,
-                        designated_submitter__isnull=True,
                         opened_at__isnull=True,
                         completed_at__isnull=True,
                     )
@@ -293,13 +292,11 @@ class SprintRun(models.Model):
                             SprintRunState.UNDER_REVIEW,
                             SprintRunState.CHANGES_REQUESTED,
                         ),
-                        designated_submitter__isnull=False,
                         opened_at__isnull=False,
                         completed_at__isnull=True,
                     )
                     | Q(
                         state=SprintRunState.COMPLETED,
-                        designated_submitter__isnull=False,
                         opened_at__isnull=False,
                         completed_at__isnull=False,
                         completed_at__gte=F("opened_at"),

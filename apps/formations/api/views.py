@@ -2,7 +2,7 @@ from django.core.exceptions import ObjectDoesNotExist
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_protect
 from rest_framework import status
-from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
+from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.permissions import IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -48,7 +48,6 @@ from apps.formations.exceptions import (
     SprintAccessDenied,
     SprintDeadlinePassed,
     SprintRuntimeConfigurationError,
-    SprintSubmissionNotAllowed,
     SprintTransitionNotAllowed,
 )
 from apps.formations.models import (
@@ -392,8 +391,6 @@ def _sprint_transition_error(exc):
         ),
     ):
         return SprintConflict()
-    if isinstance(exc, SprintSubmissionNotAllowed):
-        return PermissionDenied("Only the designated team member may submit this Sprint.")
     if isinstance(exc, SprintDeadlinePassed):
         return SprintConflict("The ProjectRun deadline has passed.")
     if isinstance(exc, SprintAccessDenied):
@@ -411,16 +408,12 @@ class OpenSprintView(APIView):
             sprint_run = open_sprint(
                 project_run_id=project_run_id,
                 sprint_run_id=sprint_run_id,
-                designated_submitter_id=serializer.validated_data[
-                    "designated_submitter"
-                ].id,
                 actor=request.user,
             )
         except (ProjectRun.DoesNotExist, SprintRun.DoesNotExist) as exc:
             raise NotFound("Sprint not found.") from exc
         except (
             SprintAccessDenied,
-            SprintSubmissionNotAllowed,
             SprintTransitionNotAllowed,
             SprintRuntimeConfigurationError,
         ) as exc:
@@ -446,7 +439,6 @@ class SubmitSprintView(APIView):
         except (
             SprintAccessDenied,
             SprintDeadlinePassed,
-            SprintSubmissionNotAllowed,
             SprintTransitionNotAllowed,
         ) as exc:
             raise _sprint_transition_error(exc) from exc
