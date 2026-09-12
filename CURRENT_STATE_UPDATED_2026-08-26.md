@@ -6,6 +6,85 @@
 
 ## Current Workstream
 
+### New ProjectRun Sprint 1 Startup
+Status: `IMPLEMENTATION COMPLETE - MANUAL POSTGRESQL VALIDATION PENDING`
+
+Current position:
+- successful full Ready Check still creates the Team and `ACTIVE` ProjectRun exactly once inside the existing transaction,
+- SprintRun rows are inserted `LOCKED` with `opened_at = NULL` so the existing PostgreSQL insert invariant remains unchanged,
+- only for a newly created ProjectRun, Sprint 1 is then transitioned to `ACTIVE` in that same startup transaction with `opened_at = ProjectRun.started_at`,
+- Sprint 2..N remain `LOCKED` with null `opened_at`; completing Sprint N still does not auto-open Sprint N+1, and Staff/Admin still explicitly opens Sprint 2+,
+- existing ProjectRun/SprintRun rows are not remediated or reopened by this change.
+
+Validation state:
+- focused startup, API, later-Sprint, idempotency, and concurrent final-confirmation regression coverage is updated,
+- Django system checks, migration-source drift inspection, Python compile checks, pytest collection, pure Sprint-domain tests, and focused frontend Dashboard tests pass,
+- PostgreSQL-backed lifecycle and concurrency execution remains developer-controlled and pending.
+
+---
+
+### MVP Phase A — GitHub Identity and Canonical ProjectRun Repository
+Status: `IMPLEMENTATION COMPLETE - MANUAL POSTGRESQL VALIDATION PENDING`
+
+Current position:
+- `UserProfile.github_username` is a nullable, locally validated GitHub identity collected through the authenticated user's own Ready Check confirmation flow rather than registration or generic profile mutation,
+- Backend and Frontend Developer confirmation requires an existing or supplied valid GitHub username; Product Designer confirmation remains valid without one,
+- a supplied username is persisted in the same transaction as Ready Check confirmation, while decline and server-authoritative expiry behavior remain independent of GitHub identity,
+- `ProjectRun.repository_url` is a nullable canonical repository reference so ProjectRun creation remains independent of manual GitHub setup,
+- Staff/Admin can list active ProjectRuns with authoritative Team member role/email/GitHub data and register/update the canonical HTTP(S) repository URL,
+- participant Workspace exposes the persisted repository link or a non-error pending-setup state,
+- repository creation, invitations, access changes, account verification, OAuth, and all GitHub API operations remain outside PROLEARN.
+
+Validation state:
+- model/API/service/frontend implementation and migration source files are complete,
+- Django system checks, migration drift inspection, pure GitHub validator tests, full frontend tests, typecheck, lint, and production build pass,
+- no migration has been applied to the developer's PostgreSQL database,
+- PostgreSQL-backed Ready Check, repository permission, lifecycle, and full-suite validation remain developer-controlled and pending.
+
+---
+
+### MVP Sprint Submission Authority — Legacy Designation Retained
+Status: `IMPLEMENTATION COMPLETE - MANUAL POSTGRESQL VALIDATION PENDING`
+
+Current position:
+- `SprintRun.designated_submitter` remains nullable for legacy/historical compatibility; existing non-null values are preserved, but the field has no current business authority and the current Sprint-opening flow does not write it,
+- any authenticated, active, current TeamMember of the exact ProjectRun may submit or resubmit when the existing ProjectRun, Sprint-state, deadline, and transition rules allow it,
+- `SprintSubmission.submitted_by` remains the authoritative append-only record of the actual actor for every submission and resubmission,
+- Sprint state/timestamp integrity, exact-ProjectRun current-membership enforcement, deadline enforcement, review transitions, terminal ProjectRun behavior, and transaction/row-locking guarantees remain in place,
+- dashboard `SUBMIT_SPRINT` and `RESUBMIT_SPRINT` guidance no longer branches by designation; `COLLABORATE` and `ADDRESS_CHANGES` are retained only as designation-free frontend decode aliases.
+
+Validation state:
+- migration source, regression coverage, service/API behavior, admin behavior, and frontend compatibility changes are implemented,
+- no migration has been applied to the developer's real PostgreSQL database,
+- PostgreSQL-specific and final full-suite validation remain developer-controlled and pending.
+
+---
+
+### Finalized MVP Role Selection / Role Change / Login Conflict
+Status: `IMPLEMENTATION COMPLETE - MANUAL POSTGRESQL VALIDATION PENDING`
+
+Current position:
+- the existing authenticated role-selection endpoint is the single mutation entry point for initial selection, same-role idempotency, and eligible persisted-role changes,
+- persisted-role changes are blocked by the canonical active ProjectReadiness, current unresolved Formation/ReadyCheck, and ACTIVE ProjectRun predicates,
+- role mutation locks the authenticated User and UserProfile in the participation lock order before rechecking blockers,
+- blocked changes return HTTP 409 with stable `role_change_blocked` and reason values,
+- login returns structured guest-role versus persisted-role conflict data without mutating the persisted role or losing exact ProjectVersion continuation,
+- explicit approval uses the normal role-selection endpoint; decline continues to use per-key guest-context clearing,
+- no schema or migration change was required.
+
+Validation state:
+- safe AST/import, Django system-check, and pytest collection checks are complete,
+- 66 pure/non-database tests pass,
+- PostgreSQL-backed service, API, historical-lifecycle, and concurrency regressions are written,
+- developer-controlled focused and full-suite PostgreSQL validation is still required.
+
+Immediate goal:
+- run the focused role-policy tests against PostgreSQL,
+- run the relevant account/profile/project/formation regressions,
+- run the full suite before marking this focused backend phase `VALIDATED`.
+
+---
+
 ### Phase 10 — Platform Internal Django Admin / CRM
 Status: `IMPLEMENTATION COMPLETE - MANUAL POSTGRESQL VALIDATION PENDING`
 
@@ -638,7 +717,7 @@ Do not let admin mutate terminal state directly except through safe service-laye
 - submission / review / history models
 
 Goal:
-Staff can inspect Sprint state, submission state/history, designated submitter, deadlines, and review status.
+Staff can inspect Sprint state, submission state/history, deadlines, review status, and any nullable legacy designated-submitter value as read-only historical data.
 
 Admin may expose staff actions only if they call the existing services safely.
 
@@ -671,7 +750,7 @@ Any state-changing admin action must follow these rules:
 - do not bypass `select_for_update`
 - do not bypass terminal guards
 - do not bypass deadline guards
-- do not bypass designated submitter or participant rules where relevant
+- do not bypass exact-ProjectRun current-TeamMember or other participant rules where relevant
 - do not mutate historical snapshots
 - do not alter append-only submission history
 - do not change ProjectVersion definitions once referenced

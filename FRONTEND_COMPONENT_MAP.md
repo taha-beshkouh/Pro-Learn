@@ -108,7 +108,7 @@ without resolving through mutable/latest catalog state.
 | `SprintList` | workspace/Sprint list response |
 | `SprintDetailHeader` | sequence, title, brief, state, schedule |
 | `StaticWorkList` | backend-filtered shared and member-relevant work items |
-| `SubmissionForm` | designated participant evidence submission/resubmission |
+| `SubmissionForm` | evidence submission/resubmission by a current TeamMember of the exact ProjectRun; backend authorizes the authenticated actor |
 | `SubmissionHistory` | append-only submissions from Sprint detail |
 | `ProjectResourceList` | workspace static work resources, not invented file links |
 
@@ -123,9 +123,11 @@ The UI may translate labels while preserving these exact values:
 - SprintRun: `LOCKED`, `ACTIVE`, `SUBMITTED`, `UNDER_REVIEW`,
   `CHANGES_REQUESTED`, `COMPLETED`.
 - Ready Check: `PENDING`, `CONFIRMED`, `DECLINED`, `EXPIRED`.
-- Next action: `WAIT_FOR_FACILITATOR`, `SUBMIT_SPRINT`, `COLLABORATE`,
-  `WAIT_FOR_REVIEW`, `RESUBMIT_SPRINT`, `ADDRESS_CHANGES`,
-  `SPRINTS_COMPLETED`, `NO_SPRINT_AVAILABLE`.
+- Next action: `WAIT_FOR_FACILITATOR`, `SUBMIT_SPRINT`, `WAIT_FOR_REVIEW`,
+  `RESUBMIT_SPRINT`, `SPRINTS_COMPLETED`, `NO_SPRINT_AVAILABLE`.
+- Legacy decode-only aliases: `COLLABORATE` renders the same guidance as
+  `SUBMIT_SPRINT`, and `ADDRESS_CHANGES` renders the same guidance as
+  `RESUBMIT_SPRINT`; neither alias represents current submission authority.
 
 ## Standard Page States
 

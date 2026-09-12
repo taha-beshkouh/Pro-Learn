@@ -58,11 +58,9 @@ describe('app router', () => {
   })
 
   it.each([
-    ['/login', 'Login'],
-    ['/register', 'Register'],
-    ['/projects', 'Project catalog'],
-    ['/projects/some-version', 'Project detail'],
-  ])('preserves the public placeholder at %s', async (path, heading) => {
+    ['/login', 'ورود به حساب'],
+    ['/register', 'ساخت حساب'],
+  ])('renders the authentication page at %s', async (path, heading) => {
     const router = createMemoryRouter(appRoutes, { initialEntries: [path] })
 
     render(<App router={router} />)
@@ -71,21 +69,36 @@ describe('app router', () => {
     expect(router.state.location.pathname).toBe(path)
   })
 
+  it('renders the real project catalog route', async () => {
+    const router = createMemoryRouter(appRoutes, { initialEntries: ['/projects'] })
+
+    render(<App router={router} />)
+
+    expect(
+      screen.getByRole('heading', { name: 'پروژه‌های منتشرشده PROLEARN' }),
+    ).toBeInTheDocument()
+    expect(router.state.location.pathname).toBe('/projects')
+    expect(
+      await screen.findByRole('heading', { name: 'دریافت پروژه‌ها ممکن نشد' }),
+    ).toBeInTheDocument()
+  })
+
   it.each([
     ['/profile/setup', 'Profile setup'],
     ['/ready-check', 'Ready Check'],
     ['/dashboard', 'Dashboard'],
     ['/workspace', 'Workspace'],
     ['/workspace/sprints/some-id', 'Sprint detail'],
-  ])('renders the protected placeholder at %s', async (path, heading) => {
+    ['/staff/formations', 'Staff Formation'],
+  ])('requires authentication at %s', async (path) => {
     const router = createMemoryRouter(appRoutes, { initialEntries: [path] })
 
     render(<App router={router} />)
 
     expect(
-      await screen.findByRole('heading', { name: heading }),
+      await screen.findByRole('heading', { name: 'ورود به حساب' }),
     ).toBeInTheDocument()
-    expect(router.state.location.pathname).toBe(path)
+    expect(router.state.location.pathname).toBe('/login')
   })
 
   it('renders NotFound for an invalid route', async () => {

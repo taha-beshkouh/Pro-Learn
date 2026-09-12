@@ -30,3 +30,5 @@ staticfiles/
 Thumbs.db
 
 *.egg-info/
+
+MUST_CHANGES.md

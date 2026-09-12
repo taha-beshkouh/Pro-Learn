@@ -1,11 +1,5 @@
-import { PlaceholderPage } from '../components/PlaceholderPage'
+import { AuthPage } from './AuthPage'
 
 export function RegisterPage() {
-  return (
-    <PlaceholderPage
-      name="Register"
-      path="/register"
-      purpose="Create an account through the backend registration and session flow."
-    />
-  )
+  return <AuthPage mode="register" />
 }

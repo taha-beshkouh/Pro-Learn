@@ -1,8 +1,9 @@
-import { useEffect, useState, type PropsWithChildren } from 'react'
+import { useCallback, useEffect, useState, type PropsWithChildren } from 'react'
 import { AuthContext, type AuthStatus } from './AuthContext'
 import { API_ENDPOINTS } from '../lib/api/endpoints'
 import { ApiError, apiClient } from '../lib/api/client'
 import type { CurrentUser } from '../lib/api/types'
+import { authenticate as authenticateRequest, type Credentials } from '../lib/api/auth'
 
 type AuthState = {
   status: AuthStatus
@@ -50,14 +51,28 @@ export function AuthProvider({ children }: PropsWithChildren) {
     }
   }, [])
 
-  async function refreshSession() {
+  const refreshSession = useCallback(async () => {
     setState(initialState)
     setState(await resolveSession())
-  }
+  }, [])
 
   async function logout() {
-    await apiClient.post<void>(API_ENDPOINTS.auth.logout)
+    try {
+      await apiClient.post<void>(API_ENDPOINTS.auth.logout)
+    } catch (error) {
+      if (error instanceof ApiError && [401, 403].includes(error.status)) {
+        const session = await resolveSession()
+        setState(session)
+        if (session.status === 'anonymous') return
+      }
+      throw error
+    }
     setState({ status: 'anonymous', user: null, error: null })
+  }
+
+  async function authenticate(mode: 'login' | 'register', credentials: Credentials) {
+    const user = await authenticateRequest(mode, credentials)
+    setState({ status: 'authenticated', user, error: null })
   }
 
   return (
@@ -66,6 +81,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
         ...state,
         refreshSession,
         logout,
+        authenticate,
       }}
     >
       {children}

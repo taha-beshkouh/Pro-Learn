@@ -1,11 +1,5 @@
-import { PlaceholderPage } from '../components/PlaceholderPage'
+import { AuthPage } from './AuthPage'
 
 export function LoginPage() {
-  return (
-    <PlaceholderPage
-      name="Login"
-      path="/login"
-      purpose="Start a backend-owned Django session using email and password."
-    />
-  )
+  return <AuthPage mode="login" />
 }

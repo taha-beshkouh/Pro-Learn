@@ -1,4 +1,5 @@
 import { NavLink, Outlet } from 'react-router-dom'
+import { SessionActions } from '../auth/SessionActions'
 
 export function PublicLayout() {
   return (
@@ -18,6 +19,7 @@ export function PublicLayout() {
           <a href="/#how-it-works">WHAT IS PROLEARN</a>
         </nav>
         <nav className="public-header__actions" aria-label="دسترسی سریع">
+          <SessionActions />
           <NavLink className="public-header__cta" to="/projects">
             دیدن پروژه‌ها
           </NavLink>

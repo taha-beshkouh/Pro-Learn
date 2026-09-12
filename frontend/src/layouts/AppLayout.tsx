@@ -1,4 +1,5 @@
 import { NavLink, Outlet } from 'react-router-dom'
+import { SessionActions } from '../auth/SessionActions'
 
 export function AppLayout() {
   return (
@@ -12,6 +13,7 @@ export function AppLayout() {
           <NavLink to="/workspace">Workspace</NavLink>
           <NavLink to="/projects">Projects</NavLink>
         </nav>
+        <SessionActions />
       </header>
       <main className="page-container">
         <Outlet />

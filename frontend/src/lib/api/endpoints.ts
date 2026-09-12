@@ -25,8 +25,20 @@ export const API_ENDPOINTS = {
     levels: '/levels/',
     list: '/projects/',
     detail: (projectId: string) => `/projects/${segment(projectId)}/`,
-    stackSelection: (projectId: string) =>
-      `/projects/${segment(projectId)}/stack-selection/`,
+    versionDetail: (projectVersionId: string) =>
+      `/project-versions/${segment(projectVersionId)}/`,
+    stackSelection: (projectVersionId: string) =>
+      `/project-versions/${segment(projectVersionId)}/stack-selection/`,
+  },
+  readiness: {
+    mine: '/project-readiness/me/',
+    candidates: (projectVersionId: string) => {
+      const params = new URLSearchParams({ project_version_id: projectVersionId })
+      return `/project-readiness/?${params.toString()}`
+    },
+  },
+  teamFormations: {
+    listCreate: '/team-formations/',
   },
   readyChecks: {
     mine: '/ready-checks/me/',
@@ -36,6 +48,9 @@ export const API_ENDPOINTS = {
       `/ready-checks/${segment(readyCheckId)}/decline/`,
   },
   projectRuns: {
+    staffList: '/project-runs/',
+    repository: (projectRunId: string) =>
+      `/project-runs/${segment(projectRunId)}/repository/`,
     dashboard: '/project-runs/me/dashboard/',
     workspace: '/project-runs/me/workspace/',
     sprints: '/project-runs/me/sprints/',

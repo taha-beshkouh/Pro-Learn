@@ -728,10 +728,19 @@
 }
 
 .home-roles {
+  position: relative;
   width: min(1332px, calc(100% - 4.5rem));
   height: 946px;
   margin-inline: auto;
   padding: 0;
+}
+
+.home-roles__error {
+  width: min(620px, calc(100% - 2rem));
+  margin: 0 auto 12px;
+  border-color: rgba(239, 106, 112, 0.5);
+  background: rgba(80, 24, 29, 0.32);
+  text-align: right;
 }
 
 .home-roles > h2 {
@@ -772,6 +781,11 @@
   color: #f4f4f4;
   text-decoration: none;
   direction: rtl;
+  cursor: pointer;
+}
+
+.role-card__link[aria-disabled='true'] {
+  cursor: wait;
 }
 
 .role-card__link:focus-visible {
@@ -792,6 +806,10 @@
 .role-card__link:hover .role-card__frame,
 .role-card__link:focus-visible .role-card__frame {
   filter: brightness(1.08);
+}
+
+.role-card.is-pending .role-card__frame {
+  filter: brightness(1.1);
 }
 
 .role-card__icon {
@@ -1158,7 +1176,7 @@
   position: absolute;
   width: 1135px;
   max-width: calc(100% - 4rem);
-  top: -119px;
+  top: -20px;
   left: 50%;
   margin: 0;
   color: #fff;
