@@ -3,7 +3,12 @@ import uuid
 from django.conf import settings
 from django.db import models
 
-from apps.profiles.validators import validate_interests, validate_timezone_name
+from apps.profiles.validators import (
+    GITHUB_USERNAME_MAX_LENGTH,
+    validate_github_username,
+    validate_interests,
+    validate_timezone_name,
+)
 
 
 class RoleCode(models.TextChoices):
@@ -38,6 +43,12 @@ class UserProfile(models.Model):
         related_name="profile",
     )
     display_name = models.CharField(max_length=100, blank=True)
+    github_username = models.CharField(
+        max_length=GITHUB_USERNAME_MAX_LENGTH,
+        null=True,
+        blank=True,
+        validators=[validate_github_username],
+    )
     selected_role = models.ForeignKey(
         Role,
         on_delete=models.PROTECT,

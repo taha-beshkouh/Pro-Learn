@@ -1,3 +1,4 @@
+from django.core.validators import URLValidator
 from rest_framework import serializers
 
 from apps.accounts.api.serializers import UserOutputSerializer
@@ -14,6 +15,10 @@ from apps.formations.models import (
 )
 from apps.formations.services import sprint_next_action
 from apps.profiles.api.serializers import RoleSerializer, TechnologyStackSerializer
+from apps.profiles.validators import (
+    GITHUB_USERNAME_MAX_LENGTH,
+    validate_github_username,
+)
 from apps.projects.api.serializers import WorkItemSerializer
 
 
@@ -75,6 +80,11 @@ class ReadyCheckSerializer(serializers.ModelSerializer):
     role = RoleSerializer(read_only=True)
     technology_stack = TechnologyStackSerializer(read_only=True)
     effective_status = serializers.SerializerMethodField()
+    github_username = serializers.CharField(
+        source="user.profile.github_username",
+        allow_null=True,
+        read_only=True,
+    )
 
     class Meta:
         model = ReadyCheck
@@ -83,6 +93,7 @@ class ReadyCheckSerializer(serializers.ModelSerializer):
             "user",
             "role",
             "technology_stack",
+            "github_username",
             "status",
             "effective_status",
             "is_current",
@@ -152,6 +163,15 @@ class MyReadyCheckSerializer(ReadyCheckSerializer):
         )
 
 
+class ReadyCheckConfirmInputSerializer(StrictFieldsSerializer):
+    github_username = serializers.CharField(
+        max_length=GITHUB_USERNAME_MAX_LENGTH,
+        allow_blank=False,
+        required=False,
+        validators=[validate_github_username],
+    )
+
+
 class OpenSprintInputSerializer(StrictFieldsSerializer):
     pass
 
@@ -173,6 +193,52 @@ class TeamMemberSnapshotSerializer(serializers.ModelSerializer):
         model = TeamMember
         fields = ("id", "user", "role", "technology_stack", "ended_at")
         read_only_fields = fields
+
+
+class StaffRepositoryTeamMemberSerializer(TeamMemberSnapshotSerializer):
+    github_username = serializers.CharField(
+        source="user.profile.github_username",
+        allow_null=True,
+        read_only=True,
+    )
+
+    class Meta(TeamMemberSnapshotSerializer.Meta):
+        fields = (*TeamMemberSnapshotSerializer.Meta.fields, "github_username")
+
+
+class StaffProjectRunRepositorySerializer(serializers.ModelSerializer):
+    project = serializers.SerializerMethodField()
+    team_id = serializers.UUIDField(read_only=True)
+    members = StaffRepositoryTeamMemberSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = ProjectRun
+        fields = (
+            "id",
+            "project",
+            "team_id",
+            "state",
+            "started_at",
+            "repository_url",
+            "members",
+        )
+        read_only_fields = fields
+
+    def get_project(self, obj):
+        return {
+            "id": str(obj.project_version.project_template_id),
+            "name": obj.project_version.project_template.name,
+            "version_id": str(obj.project_version_id),
+            "version_number": obj.project_version.version_number,
+        }
+
+
+class ProjectRunRepositoryInputSerializer(StrictFieldsSerializer):
+    repository_url = serializers.URLField(
+        max_length=500,
+        allow_blank=False,
+        validators=[URLValidator(schemes=["http", "https"])],
+    )
 
 
 class SprintSubmissionSerializer(serializers.ModelSerializer):
@@ -300,6 +366,7 @@ class ProjectRunWorkspaceSerializer(ProjectRunDashboardSerializer):
     class Meta(ProjectRunDashboardSerializer.Meta):
         fields = (
             *ProjectRunDashboardSerializer.Meta.fields,
+            "repository_url",
             "sprints",
             "resources",
         )
@@ -319,11 +386,29 @@ class ProjectRunLifecycleSerializer(serializers.ModelSerializer):
 
 
 class SprintRunDetailSerializer(SprintRunSerializer):
+    repository_url = serializers.URLField(
+        source="workspace_project_run.repository_url",
+        allow_null=True,
+        read_only=True,
+    )
+    latest_submission = serializers.SerializerMethodField()
     submissions = SprintSubmissionSerializer(many=True, read_only=True)
     work_items = serializers.SerializerMethodField()
 
     class Meta(SprintRunSerializer.Meta):
-        fields = (*SprintRunSerializer.Meta.fields, "work_items", "submissions")
+        fields = (
+            *SprintRunSerializer.Meta.fields,
+            "repository_url",
+            "work_items",
+            "latest_submission",
+            "submissions",
+        )
+
+    def get_latest_submission(self, obj):
+        submissions = list(obj.submissions.all())
+        if not submissions:
+            return None
+        return SprintSubmissionSerializer(submissions[-1]).data
 
     def get_work_items(self, obj):
         project_run = obj.workspace_project_run

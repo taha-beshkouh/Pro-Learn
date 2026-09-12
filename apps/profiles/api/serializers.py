@@ -53,6 +53,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
             "id",
             "email",
             "display_name",
+            "github_username",
             "selected_role",
             "timezone",
             "language",

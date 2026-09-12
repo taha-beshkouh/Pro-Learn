@@ -145,6 +145,7 @@ class ProjectRun(models.Model):
     started_at = models.DateTimeField(editable=False)
     deadline_at = models.DateTimeField(editable=False)
     ended_at = models.DateTimeField(null=True, blank=True, editable=False)
+    repository_url = models.URLField(max_length=500, null=True, blank=True)
 
     class Meta:
         ordering = ["-started_at", "id"]

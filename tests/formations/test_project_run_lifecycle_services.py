@@ -38,11 +38,13 @@ def _ordered_sprints(project_run):
 
 
 def _complete_sprint(*, sprint_run, member, facilitator, now):
-    open_sprint(
-        sprint_run_id=sprint_run.id,
-        actor=facilitator,
-        now=now,
-    )
+    sprint_run.refresh_from_db()
+    if sprint_run.state == SprintRunState.LOCKED:
+        open_sprint(
+            sprint_run_id=sprint_run.id,
+            actor=facilitator,
+            now=now,
+        )
     submit_sprint(
         sprint_run_id=sprint_run.id,
         user=member.user,
@@ -80,11 +82,6 @@ def test_submission_at_deadline_is_rejected_without_history(
 ):
     first = _ordered_sprints(runtime_project_run)[0]
     backend = runtime_members["BACKEND_DEVELOPER"]
-    open_sprint(
-        sprint_run_id=first.id,
-        actor=facilitator,
-        now=runtime_project_run.deadline_at - timedelta(days=1),
-    )
 
     with pytest.raises(SprintDeadlinePassed):
         submit_sprint(
@@ -107,11 +104,6 @@ def test_pre_deadline_submission_can_be_reviewed_after_deadline(
     backend = runtime_members["BACKEND_DEVELOPER"]
     before_deadline = runtime_project_run.deadline_at - timedelta(microseconds=1)
     after_deadline = runtime_project_run.deadline_at + timedelta(hours=1)
-    open_sprint(
-        sprint_run_id=first.id,
-        actor=facilitator,
-        now=before_deadline,
-    )
     submit_sprint(
         sprint_run_id=first.id,
         user=backend.user,
@@ -144,11 +136,6 @@ def test_resubmission_after_deadline_is_rejected_in_same_sprint(
     backend = runtime_members["BACKEND_DEVELOPER"]
     before_deadline = runtime_project_run.deadline_at - timedelta(seconds=1)
     after_deadline = runtime_project_run.deadline_at + timedelta(seconds=1)
-    open_sprint(
-        sprint_run_id=first.id,
-        actor=facilitator,
-        now=before_deadline,
-    )
     submit_sprint(
         sprint_run_id=first.id,
         user=backend.user,

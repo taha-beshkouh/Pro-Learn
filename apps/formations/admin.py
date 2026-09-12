@@ -224,6 +224,7 @@ class ProjectRunAdmin(ActionOnlyAdmin):
         "version_number",
         "team",
         "state",
+        "repository_url",
         "started_at",
         "deadline_at",
         "ended_at",
@@ -234,7 +235,12 @@ class ProjectRunAdmin(ActionOnlyAdmin):
         "project_version__version_number",
         ("ended_at", admin.EmptyFieldListFilter),
     )
-    search_fields = ("=id", "=team__id", "project_version__project_template__name")
+    search_fields = (
+        "=id",
+        "=team__id",
+        "project_version__project_template__name",
+        "repository_url",
+    )
     list_select_related = (
         "team",
         "project_version",

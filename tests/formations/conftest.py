@@ -55,7 +55,19 @@ def facilitator(django_user_model, password):
 
 def create_member(django_user_model, *, email, password, role):
     user = django_user_model.objects.create_user(email=email, password=password)
-    UserProfile.objects.create(user=user, selected_role=role)
+    github_username = (
+        f"prolearn-{user.id.hex[:12]}"
+        if role.code in {
+            RoleCode.BACKEND_DEVELOPER,
+            RoleCode.FRONTEND_DEVELOPER,
+        }
+        else None
+    )
+    UserProfile.objects.create(
+        user=user,
+        selected_role=role,
+        github_username=github_username,
+    )
     return user
 
 

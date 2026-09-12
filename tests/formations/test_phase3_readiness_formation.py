@@ -51,7 +51,19 @@ def create_member(django_user_model, password, *, role, label):
         email=f"phase3-{label}@example.com",
         password=password,
     )
-    UserProfile.objects.create(user=user, selected_role=role)
+    github_username = (
+        f"phase3-{user.id.hex[:12]}"
+        if role.code in {
+            RoleCode.BACKEND_DEVELOPER,
+            RoleCode.FRONTEND_DEVELOPER,
+        }
+        else None
+    )
+    UserProfile.objects.create(
+        user=user,
+        selected_role=role,
+        github_username=github_username,
+    )
     return user
 
 

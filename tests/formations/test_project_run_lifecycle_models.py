@@ -30,11 +30,13 @@ def _ordered_sprints(project_run):
 
 
 def _complete_sprint(*, sprint_run, member, facilitator, now):
-    open_sprint(
-        sprint_run_id=sprint_run.id,
-        actor=facilitator,
-        now=now,
-    )
+    sprint_run.refresh_from_db()
+    if sprint_run.state == SprintRunState.LOCKED:
+        open_sprint(
+            sprint_run_id=sprint_run.id,
+            actor=facilitator,
+            now=now,
+        )
     submit_sprint(
         sprint_run_id=sprint_run.id,
         user=member.user,
@@ -95,10 +97,6 @@ def test_database_submission_trigger_rejects_overdue_history(
 ):
     first = _ordered_sprints(overdue_runtime_project_run)[0]
     backend = overdue_runtime_members["BACKEND_DEVELOPER"]
-    open_sprint(
-        sprint_run_id=first.id,
-        actor=facilitator,
-    )
 
     with pytest.raises(IntegrityError), transaction.atomic():
         SprintSubmission.objects.create(
@@ -159,10 +157,6 @@ def test_database_blocks_sprint_state_changes_after_terminal_run(
 ):
     first = _ordered_sprints(overdue_runtime_project_run)[0]
     backend = overdue_runtime_members["BACKEND_DEVELOPER"]
-    open_sprint(
-        sprint_run_id=first.id,
-        actor=facilitator,
-    )
     mark_project_run_incomplete(
         project_run_id=overdue_runtime_project_run.id,
         actor=facilitator,

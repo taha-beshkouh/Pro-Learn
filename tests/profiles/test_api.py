@@ -151,6 +151,23 @@ def test_role_selection_rejects_an_unknown_role(api_client, user, profile):
     assert profile.selected_role is None
 
 
+def test_profile_update_cannot_bypass_ready_check_github_flow(
+    api_client, user, profile
+):
+    api_client.force_login(user)
+
+    response = api_client.patch(
+        PROFILE_URL,
+        {"github_username": "bypass-ready-check"},
+        format="json",
+    )
+
+    assert response.status_code == 400
+    assert response.data["github_username"] == ["Unknown field."]
+    profile.refresh_from_db()
+    assert profile.github_username is None
+
+
 def test_role_selection_cannot_target_another_user(
     api_client,
     user,

@@ -45,13 +45,14 @@ class UserProfileAdmin(ReadOnlyAdmin):
     list_display = (
         "user",
         "display_name",
+        "github_username",
         "selected_role",
         "timezone",
         "language",
         "updated_at",
     )
     list_filter = ("selected_role", "language", "created_at")
-    search_fields = ("user__email", "display_name")
+    search_fields = ("user__email", "display_name", "github_username")
     list_select_related = ("user", "selected_role")
     ordering = ("user__email",)
     date_hierarchy = "created_at"

@@ -18,8 +18,10 @@ from apps.formations.exceptions import (
 from apps.formations.models import (
     ProjectReadiness,
     ProjectRun,
+    ProjectRunState,
     ReadyCheck,
     ReadyCheckStatus,
+    SprintRunState,
     Team,
     TeamFormation,
     TeamMember,
@@ -361,7 +363,15 @@ def test_declined_member_cannot_replace_themselves(
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.postgresql
-def test_concurrent_confirmations_mark_formation_ready_once(formation):
+def test_concurrent_confirmations_start_one_run_with_only_first_sprint_active(
+    runtime_sprint_templates,
+    facilitator,
+    proposed_members,
+):
+    formation = create_team_formation(
+        created_by=facilitator,
+        readiness_ids=[readiness.id for readiness in proposed_members],
+    )
     checks = list(formation.ready_checks.order_by("id"))
     confirm_ready_check(ready_check_id=checks[0].id, user=checks[0].user)
     barrier = Barrier(2)
@@ -393,6 +403,18 @@ def test_concurrent_confirmations_mark_formation_ready_once(formation):
     assert TeamMember.objects.filter(
         project_run__team__formation=formation
     ).count() == 3
+    project_run = ProjectRun.objects.get(team__formation=formation)
+    assert project_run.state == ProjectRunState.ACTIVE
+    sprint_runs = list(
+        project_run.sprint_runs.order_by("sprint_template__sequence", "id")
+    )
+    assert len(sprint_runs) == len(runtime_sprint_templates) == 3
+    first, *later = sprint_runs
+    assert first.sprint_template.sequence == 1
+    assert first.state == SprintRunState.ACTIVE
+    assert first.opened_at == project_run.started_at
+    assert all(sprint_run.state == SprintRunState.LOCKED for sprint_run in later)
+    assert all(sprint_run.opened_at is None for sprint_run in later)
 
 
 @pytest.mark.django_db(transaction=True)

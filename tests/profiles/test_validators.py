@@ -3,10 +3,28 @@ from django.core.exceptions import ValidationError
 
 from apps.profiles.api.serializers import ProfileUpdateSerializer
 from apps.profiles.validators import (
+    validate_github_username,
     validate_interests,
     validate_internal_return_path,
     validate_timezone_name,
 )
+
+
+@pytest.mark.parametrize(
+    "username",
+    ["octocat", "prolearn-user-7", "A1", "a" * 39],
+)
+def test_valid_github_usernames(username):
+    validate_github_username(username)
+
+
+@pytest.mark.parametrize(
+    "username",
+    ["@octocat", "https://github.com/octocat", "-octocat", "octocat-", "octo--cat", "a" * 40],
+)
+def test_invalid_github_usernames(username):
+    with pytest.raises(ValidationError):
+        validate_github_username(username)
 
 
 @pytest.mark.parametrize("timezone", ["UTC", "Asia/Tehran", "Europe/London"])

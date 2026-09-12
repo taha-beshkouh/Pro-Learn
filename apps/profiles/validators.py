@@ -1,3 +1,4 @@
+import re
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -6,6 +7,20 @@ from django.core.exceptions import ValidationError
 
 MAX_INTERESTS = 50
 MAX_INTEREST_LENGTH = 100
+GITHUB_USERNAME_MAX_LENGTH = 39
+GITHUB_USERNAME_PATTERN = re.compile(
+    rf"^(?=.{{1,{GITHUB_USERNAME_MAX_LENGTH}}}\Z)[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$"
+)
+
+
+def validate_github_username(value: str) -> None:
+    if value in (None, ""):
+        return
+    if not isinstance(value, str) or not GITHUB_USERNAME_PATTERN.fullmatch(value):
+        raise ValidationError(
+            "Enter a valid GitHub username (letters, numbers, and single hyphens only).",
+            code="invalid",
+        )
 
 
 def validate_timezone_name(value: str) -> None:

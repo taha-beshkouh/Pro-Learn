@@ -38,6 +38,22 @@ class ReadyCheckNotReplaceable(FormationDomainError):
     pass
 
 
+class GithubUsernameRequired(FormationDomainError):
+    pass
+
+
+class InvalidGithubUsername(FormationDomainError):
+    pass
+
+
+class InvalidRepositoryUrl(FormationDomainError):
+    pass
+
+
+class RepositoryAlreadyAssigned(FormationDomainError):
+    pass
+
+
 class FormationAlreadyReady(FormationDomainError):
     pass
 

@@ -39,8 +39,11 @@ def test_dashboard_summarizes_members_active_run_and_next_action(
     assert response.data["membership"]["technology_stack"]["code"] == "django-drf"
     assert len(response.data["team"]) == 3
     assert response.data["current_sprint"]["id"] == str(first.id)
-    assert response.data["current_sprint"]["state"] == SprintRunState.LOCKED
-    assert response.data["next_action"] == "WAIT_FOR_FACILITATOR"
+    assert response.data["current_sprint"]["state"] == SprintRunState.ACTIVE
+    assert response.data["current_sprint"]["opened_at"] == (
+        runtime_project_run.started_at.isoformat().replace("+00:00", "Z")
+    )
+    assert response.data["next_action"] == "SUBMIT_SPRINT"
     assert response.data["state"] == ProjectRunState.ACTIVE
     assert response.data["deadline"] == response.data["deadline_at"]
 
@@ -116,7 +119,49 @@ def test_workspace_and_sprint_detail_show_only_member_relevant_static_content(
     assert {
         item["id"] for item in detail.data["work_items"]
     }.isdisjoint(canonical_work_item_ids)
+    assert detail.data["repository_url"] is None
+    assert detail.data["latest_submission"] is None
     assert detail.data["submissions"] == []
+
+
+def test_locked_sprint_detail_is_visible_but_not_submittable(
+    api_client,
+    runtime_project_run,
+    runtime_members,
+):
+    backend = runtime_members["BACKEND_DEVELOPER"]
+    second = _ordered_sprints(runtime_project_run)[1]
+    api_client.force_login(backend.user)
+
+    detail = api_client.get(f"/api/v1/project-runs/me/sprints/{second.id}/")
+    submission = api_client.post(
+        _action_url(runtime_project_run, second, "submit"),
+        {"evidence": "A locked Sprint cannot be submitted."},
+        format="json",
+    )
+
+    assert detail.status_code == 200
+    assert detail.data["state"] == SprintRunState.LOCKED
+    assert submission.status_code == 409
+    second.refresh_from_db()
+    assert second.state == SprintRunState.LOCKED
+    assert second.submissions.count() == 0
+
+
+def test_anonymous_and_invalid_sprint_detail_requests_are_safe(
+    api_client,
+    runtime_project_run,
+    runtime_members,
+):
+    first = _ordered_sprints(runtime_project_run)[0]
+
+    anonymous = api_client.get(f"/api/v1/project-runs/me/sprints/{first.id}/")
+
+    api_client.force_login(runtime_members["BACKEND_DEVELOPER"].user)
+    invalid = api_client.get("/api/v1/project-runs/me/sprints/not-a-uuid/")
+
+    assert anonymous.status_code == 403
+    assert invalid.status_code == 404
 
 
 def test_non_member_cannot_read_or_submit_another_project_run(
@@ -173,7 +218,7 @@ def test_normal_member_cannot_perform_management_transition(
     assert response.status_code == 403
 
 
-def test_staff_opens_sprint_without_designation_and_current_member_submits(
+def test_first_sprint_starts_without_designation_and_current_member_submits(
     api_client,
     runtime_project_run,
     runtime_members,
@@ -182,15 +227,9 @@ def test_staff_opens_sprint_without_designation_and_current_member_submits(
     backend = runtime_members["BACKEND_DEVELOPER"]
     frontend = runtime_members["FRONTEND_DEVELOPER"]
     first = _ordered_sprints(runtime_project_run)[0]
-    api_client.force_login(facilitator)
-    opened = api_client.post(
-        _action_url(runtime_project_run, first, "open"),
-        {},
-        format="json",
-    )
-    assert opened.status_code == 200
-    assert opened.data["state"] == SprintRunState.ACTIVE
-    assert opened.data["designated_submitter"] is None
+    assert first.state == SprintRunState.ACTIVE
+    assert first.opened_at == runtime_project_run.started_at
+    assert first.designated_submitter_id is None
 
     api_client.force_login(frontend.user)
     dashboard = api_client.get("/api/v1/project-runs/me/dashboard/")
@@ -231,9 +270,9 @@ def test_staff_open_rejects_legacy_designation_input_and_anonymous_access(
     runtime_members,
     facilitator,
 ):
-    first = _ordered_sprints(runtime_project_run)[0]
+    second = _ordered_sprints(runtime_project_run)[1]
     backend = runtime_members["BACKEND_DEVELOPER"]
-    url = _action_url(runtime_project_run, first, "open")
+    url = _action_url(runtime_project_run, second, "open")
 
     api_client.force_login(facilitator)
     legacy = api_client.post(
@@ -247,9 +286,9 @@ def test_staff_open_rejects_legacy_designation_input_and_anonymous_access(
     anonymous = api_client.post(url, {}, format="json")
     assert anonymous.status_code == 403
 
-    first.refresh_from_db()
-    assert first.state == SprintRunState.LOCKED
-    assert first.designated_submitter_id is None
+    second.refresh_from_db()
+    assert second.state == SprintRunState.LOCKED
+    assert second.designated_submitter_id is None
 
 
 def test_review_changes_resubmission_and_completion_use_same_sprint(
@@ -262,11 +301,12 @@ def test_review_changes_resubmission_and_completion_use_same_sprint(
     frontend = runtime_members["FRONTEND_DEVELOPER"]
     first = _ordered_sprints(runtime_project_run)[0]
     api_client.force_login(facilitator)
-    api_client.post(
-        _action_url(runtime_project_run, first, "open"),
-        {},
+    repository = api_client.patch(
+        f"/api/v1/project-runs/{runtime_project_run.id}/repository/",
+        {"repository_url": "https://github.com/prolearn/review-history"},
         format="json",
     )
+    assert repository.status_code == 200
     api_client.force_login(backend.user)
     api_client.post(
         _action_url(runtime_project_run, first, "submit"),
@@ -306,10 +346,17 @@ def test_review_changes_resubmission_and_completion_use_same_sprint(
     api_client.force_login(backend.user)
     detail = api_client.get(f"/api/v1/project-runs/me/sprints/{first.id}/")
     assert detail.status_code == 200
+    assert detail.data["repository_url"] == (
+        "https://github.com/prolearn/review-history"
+    )
     assert [item["evidence"] for item in detail.data["submissions"]] == [
         "Version one",
         "Version two",
     ]
+    assert detail.data["latest_submission"]["id"] == detail.data["submissions"][-1][
+        "id"
+    ]
+    assert detail.data["latest_submission"]["evidence"] == "Version two"
     assert [
         item["submitted_by"]["id"] for item in detail.data["submissions"]
     ] == [str(backend.id), str(frontend.id)]
@@ -338,14 +385,6 @@ def test_overdue_submission_is_conflict_and_client_time_cannot_bypass_cutoff(
 ):
     backend = overdue_runtime_members["BACKEND_DEVELOPER"]
     first = _ordered_sprints(overdue_runtime_project_run)[0]
-    api_client.force_login(facilitator)
-    opened = api_client.post(
-        _action_url(overdue_runtime_project_run, first, "open"),
-        {},
-        format="json",
-    )
-    assert opened.status_code == 200
-
     api_client.force_login(backend.user)
     rejected = api_client.post(
         _action_url(overdue_runtime_project_run, first, "submit"),

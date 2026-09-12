@@ -64,6 +64,7 @@ def active_project_readiness_candidates(*, project_version_id):
 def _ready_checks_queryset():
     return ReadyCheck.objects.select_related(
         "user",
+        "user__profile",
         "role",
         "technology_stack",
         "proposed_by",
@@ -116,6 +117,7 @@ def ready_check_detail(*, ready_check_id):
 def _team_members_queryset():
     return TeamMember.objects.select_related(
         "user",
+        "user__profile",
         "role",
         "technology_stack",
     ).order_by("role__name", "id")
@@ -174,6 +176,24 @@ def active_project_run_for_user(*, user: User) -> ProjectRun:
         member for member in project_run.members.all() if member.user_id == user.id
     )
     return project_run
+
+
+def active_project_runs_for_staff():
+    return (
+        ProjectRun.objects.select_related(
+            "team",
+            "project_version",
+            "project_version__project_template",
+        )
+        .prefetch_related(
+            Prefetch("members", queryset=_team_members_queryset())
+        )
+        .filter(
+            state=ProjectRunState.ACTIVE,
+            ended_at__isnull=True,
+        )
+        .order_by("-started_at", "id")
+    )
 
 
 def active_sprint_run_for_user(*, user: User, sprint_run_id) -> SprintRun:

@@ -11,7 +11,12 @@ from apps.formations.exceptions import (
     InvalidFormationMembers,
     InvalidProjectReadinessSelection,
 )
-from apps.formations.models import ProjectReadiness, ProjectRun, ProjectRunState
+from apps.formations.models import (
+    ProjectReadiness,
+    ProjectRun,
+    ProjectRunState,
+    SprintRunState,
+)
 from apps.formations.services import (
     complete_sprint,
     confirm_ready_check,
@@ -218,11 +223,12 @@ def test_completed_project_run_does_not_block_role_change(
         "sprint_template__sequence",
         "id",
     ):
-        open_sprint(
-            sprint_run_id=sprint_run.id,
-            actor=facilitator,
-            now=transition_at,
-        )
+        if sprint_run.state == SprintRunState.LOCKED:
+            open_sprint(
+                sprint_run_id=sprint_run.id,
+                actor=facilitator,
+                now=transition_at,
+            )
         submit_sprint(
             sprint_run_id=sprint_run.id,
             user=backend_user,

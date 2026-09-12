@@ -20,7 +20,7 @@ from apps.formations.models import (
     TeamFormation,
     TeamMember,
 )
-from apps.formations.services import open_sprint, submit_sprint
+from apps.formations.services import submit_sprint
 from apps.profiles.models import (
     ProfileLink,
     Role,
@@ -306,10 +306,6 @@ def test_sprint_admin_actions_use_the_validated_service_flow(
     sprint_admin = admin.site._registry[SprintRun]
     queryset = SprintRun.objects.filter(id=sprint_run.id)
 
-    open_sprint(
-        sprint_run_id=sprint_run.id,
-        actor=admin_user,
-    )
     submit_sprint(
         sprint_run_id=sprint_run.id,
         user=submitter.user,
@@ -353,7 +349,7 @@ def test_forbidden_sprint_transition_remains_forbidden_through_admin(
     )
 
     sprint_run.refresh_from_db()
-    assert sprint_run.state == SprintRunState.LOCKED
+    assert sprint_run.state == SprintRunState.ACTIVE
     assert messages.ERROR in message_levels(request)
 
 

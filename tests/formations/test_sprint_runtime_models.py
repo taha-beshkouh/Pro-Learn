@@ -17,11 +17,10 @@ from apps.formations.services import (
     confirm_ready_check,
     create_team_formation,
     mark_sprint_under_review,
-    open_sprint,
     request_sprint_changes,
     submit_sprint,
 )
-from apps.profiles.models import UserProfile
+from apps.profiles.models import RoleCode, UserProfile
 from apps.projects.models import ProjectVersion, SprintTemplate
 
 
@@ -48,7 +47,18 @@ def _create_other_project_run(
             email=f"cross-run-member-{index}@example.com",
             password=password,
         )
-        UserProfile.objects.create(user=user, selected_role=source_member.role)
+        UserProfile.objects.create(
+            user=user,
+            selected_role=source_member.role,
+            github_username=(
+                f"cross-{user.id.hex[:12]}"
+                if source_member.role.code in {
+                    RoleCode.BACKEND_DEVELOPER,
+                    RoleCode.FRONTEND_DEVELOPER,
+                }
+                else None
+            ),
+        )
         readiness = ProjectReadiness.objects.create(
             user=user,
             role=source_member.role,
@@ -109,10 +119,6 @@ def test_database_rejects_invalid_state_transition(
     facilitator,
 ):
     first = _ordered_sprints(runtime_project_run)[0]
-    open_sprint(
-        sprint_run_id=first.id,
-        actor=facilitator,
-    )
 
     with pytest.raises(IntegrityError), transaction.atomic():
         SprintRun.objects.filter(id=first.id).update(
@@ -129,12 +135,9 @@ def test_database_accepts_full_valid_state_flow_without_designation(
     first = _ordered_sprints(runtime_project_run)[0]
     backend = runtime_members["BACKEND_DEVELOPER"]
     frontend = runtime_members["FRONTEND_DEVELOPER"]
-    opened = open_sprint(
-        sprint_run_id=first.id,
-        actor=facilitator,
-    )
-    assert opened.state == SprintRunState.ACTIVE
-    assert opened.designated_submitter_id is None
+    assert first.state == SprintRunState.ACTIVE
+    assert first.opened_at == runtime_project_run.started_at
+    assert first.designated_submitter_id is None
 
     submitted, first_submission = submit_sprint(
         sprint_run_id=first.id,
@@ -177,17 +180,14 @@ def test_database_accepts_full_valid_state_flow_without_designation(
 def test_database_keeps_sprint_timestamp_invariants_without_designation(
     runtime_project_run,
 ):
-    first = _ordered_sprints(runtime_project_run)[0]
+    first, second, _ = _ordered_sprints(runtime_project_run)
 
     with pytest.raises(IntegrityError) as missing_opened_at, transaction.atomic():
-        SprintRun.objects.filter(id=first.id).update(state=SprintRunState.ACTIVE)
+        SprintRun.objects.filter(id=second.id).update(state=SprintRunState.ACTIVE)
     assert "formations_sprint_state_timestamps_valid" in str(missing_opened_at.value)
 
-    opened_at = timezone.now()
-    SprintRun.objects.filter(id=first.id).update(
-        state=SprintRunState.ACTIVE,
-        opened_at=opened_at,
-    )
+    opened_at = first.opened_at
+    assert opened_at == runtime_project_run.started_at
     SprintRun.objects.filter(id=first.id).update(state=SprintRunState.SUBMITTED)
     SprintRun.objects.filter(id=first.id).update(state=SprintRunState.UNDER_REVIEW)
 
@@ -223,7 +223,6 @@ def test_database_rejects_submission_by_member_of_another_project_run(
         source_members=runtime_members,
     )
     other_member = other_run.members.order_by("id").first()
-    open_sprint(sprint_run_id=first.id, actor=facilitator)
 
     with pytest.raises(IntegrityError, match="Invalid Sprint submission"):
         with transaction.atomic():
@@ -241,7 +240,7 @@ def test_database_rejects_cross_project_run_legacy_designation(
     django_user_model,
     password,
 ):
-    first = _ordered_sprints(runtime_project_run)[0]
+    _, second, _ = _ordered_sprints(runtime_project_run)
     other_run = _create_other_project_run(
         facilitator=facilitator,
         django_user_model=django_user_model,
@@ -253,7 +252,7 @@ def test_database_rejects_cross_project_run_legacy_designation(
 
     with pytest.raises(IntegrityError, match="Legacy Sprint designation"):
         with transaction.atomic():
-            SprintRun.objects.filter(id=first.id).update(
+            SprintRun.objects.filter(id=second.id).update(
                 state=SprintRunState.ACTIVE,
                 designated_submitter_id=other_member.id,
                 opened_at=timezone.now(),
@@ -267,7 +266,6 @@ def test_database_rejects_submission_by_non_current_member(
 ):
     first = _ordered_sprints(runtime_project_run)[0]
     backend = runtime_members["BACKEND_DEVELOPER"]
-    open_sprint(sprint_run_id=first.id, actor=facilitator)
 
     with pytest.raises(IntegrityError, match="Invalid Sprint submission"):
         with transaction.atomic():
@@ -282,21 +280,26 @@ def test_database_rejects_submission_by_non_current_member(
 def test_historical_designation_remains_valid_but_is_not_submission_authority(
     runtime_project_run,
     runtime_members,
+    facilitator,
 ):
-    first = _ordered_sprints(runtime_project_run)[0]
+    first, second, _ = _ordered_sprints(runtime_project_run)
     backend = runtime_members["BACKEND_DEVELOPER"]
     frontend = runtime_members["FRONTEND_DEVELOPER"]
     opened_at = timezone.now()
 
+    submit_sprint(sprint_run_id=first.id, user=backend.user)
+    mark_sprint_under_review(sprint_run_id=first.id, actor=facilitator)
+    complete_sprint(sprint_run_id=first.id, actor=facilitator)
+
     # Simulate a row opened before designation stopped being written by current flows.
-    SprintRun.objects.filter(id=first.id).update(
+    SprintRun.objects.filter(id=second.id).update(
         state=SprintRunState.ACTIVE,
         designated_submitter=backend,
         opened_at=opened_at,
     )
 
     submitted, submission = submit_sprint(
-        sprint_run_id=first.id,
+        sprint_run_id=second.id,
         user=frontend.user,
         evidence="Submitted by another current member",
     )
@@ -313,10 +316,6 @@ def test_sprint_submission_history_is_database_append_only(
 ):
     first = _ordered_sprints(runtime_project_run)[0]
     backend = runtime_members["BACKEND_DEVELOPER"]
-    open_sprint(
-        sprint_run_id=first.id,
-        actor=facilitator,
-    )
     _, submission = submit_sprint(
         sprint_run_id=first.id,
         user=backend.user,

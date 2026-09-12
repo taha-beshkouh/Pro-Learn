@@ -21,12 +21,15 @@ from apps.formations.api.serializers import (
     ProjectReadinessSerializer,
     ProjectRunDashboardSerializer,
     ProjectRunLifecycleSerializer,
+    ProjectRunRepositoryInputSerializer,
     ProjectRunWorkspaceSerializer,
+    ReadyCheckConfirmInputSerializer,
     ReadyCheckSerializer,
     ReplacementInputSerializer,
     SprintRunDetailSerializer,
     SprintRunSerializer,
     SprintSubmissionInputSerializer,
+    StaffProjectRunRepositorySerializer,
     TeamFormationInputSerializer,
     TeamFormationSerializer,
 )
@@ -37,14 +40,18 @@ from apps.formations.exceptions import (
     InvalidFormationMembers,
     InvalidFormationReadiness,
     InvalidFormationStack,
+    InvalidGithubUsername,
     InvalidProjectReadinessSelection,
+    InvalidRepositoryUrl,
     MemberHasActiveProjectRun,
     MemberHasUnresolvedFormation,
     ProjectRunDeadlineNotReached,
     ProjectRunTransitionNotAllowed,
+    GithubUsernameRequired,
     ReadyCheckExpired,
     ReadyCheckNotPending,
     ReadyCheckNotReplaceable,
+    RepositoryAlreadyAssigned,
     SprintAccessDenied,
     SprintDeadlinePassed,
     SprintRuntimeConfigurationError,
@@ -61,6 +68,7 @@ from apps.formations.selectors import (
     active_project_readiness_candidates,
     active_project_readiness_for_user,
     active_project_run_for_user,
+    active_project_runs_for_staff,
     active_sprint_run_for_user,
     current_ready_checks_for_user,
     formation_detail,
@@ -79,6 +87,7 @@ from apps.formations.services import (
     replace_ready_check_member,
     request_sprint_changes,
     submit_sprint,
+    update_project_run_repository,
 )
 from apps.projects.api.exceptions import ProjectConfigurationUnavailable
 from apps.projects.exceptions import ProjectConfigurationError
@@ -288,11 +297,22 @@ class MyReadyCheckListView(APIView):
 class ReadyCheckResponseView(APIView):
     permission_classes = [IsAuthenticated]
     action = None
+    input_serializer_class = EmptyActionInputSerializer
 
     def post(self, request, ready_check_id):
+        input_serializer = self.input_serializer_class(data=request.data)
+        input_serializer.is_valid(raise_exception=True)
         service = confirm_ready_check if self.action == "confirm" else decline_ready_check
+        service_kwargs = {
+            "ready_check_id": ready_check_id,
+            "user": request.user,
+        }
+        if self.action == "confirm":
+            service_kwargs["github_username"] = input_serializer.validated_data.get(
+                "github_username"
+            )
         try:
-            ready_check = service(ready_check_id=ready_check_id, user=request.user)
+            ready_check = service(**service_kwargs)
         except ReadyCheck.DoesNotExist as exc:
             raise NotFound("Ready check not found.") from exc
         except ReadyCheckExpired as exc:
@@ -302,6 +322,18 @@ class ReadyCheckResponseView(APIView):
         except ReadyCheckNotPending as exc:
             raise ValidationError(
                 {"ready_check": ["This Ready Check is no longer pending."]}
+            ) from exc
+        except GithubUsernameRequired as exc:
+            raise ValidationError(
+                {
+                    "github_username": [
+                        "A valid GitHub username is required for this project role."
+                    ]
+                }
+            ) from exc
+        except InvalidGithubUsername as exc:
+            raise ValidationError(
+                {"github_username": ["Enter a valid GitHub username."]}
             ) from exc
         except MemberHasActiveProjectRun as exc:
             raise ValidationError(
@@ -326,6 +358,7 @@ class ReadyCheckResponseView(APIView):
 
 class ConfirmReadyCheckView(ReadyCheckResponseView):
     action = "confirm"
+    input_serializer_class = ReadyCheckConfirmInputSerializer
 
 
 class DeclineReadyCheckView(ReadyCheckResponseView):
@@ -352,6 +385,50 @@ class CurrentProjectRunWorkspaceView(CurrentProjectRunMixin, APIView):
 
     def get(self, request):
         return Response(ProjectRunWorkspaceSerializer(self.get_project_run(request)).data)
+
+
+class StaffProjectRunRepositoryListView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        return Response(
+            StaffProjectRunRepositorySerializer(
+                active_project_runs_for_staff(), many=True
+            ).data
+        )
+
+
+class StaffProjectRunRepositoryDetailView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def patch(self, request, project_run_id):
+        serializer = ProjectRunRepositoryInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            project_run = update_project_run_repository(
+                project_run_id=project_run_id,
+                actor=request.user,
+                repository_url=serializer.validated_data["repository_url"],
+            )
+        except ProjectRun.DoesNotExist as exc:
+            raise NotFound("Active ProjectRun not found.") from exc
+        except InvalidRepositoryUrl as exc:
+            raise ValidationError(
+                {"repository_url": ["Enter a valid HTTP or HTTPS URL."]}
+            ) from exc
+        except RepositoryAlreadyAssigned as exc:
+            raise ValidationError(
+                {
+                    "repository_url": [
+                        "This repository is already assigned to another ProjectRun."
+                    ]
+                }
+            ) from exc
+        return Response(
+            StaffProjectRunRepositorySerializer(
+                active_project_runs_for_staff().get(id=project_run.id)
+            ).data
+        )
 
 
 class CurrentProjectRunSprintListView(CurrentProjectRunMixin, APIView):

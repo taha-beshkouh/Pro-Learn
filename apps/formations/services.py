@@ -1,6 +1,9 @@
 from datetime import timedelta
+from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID
 
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.core.validators import URLValidator
 from django.db import IntegrityError, transaction
 from django.db.models import Prefetch
 from django.utils import timezone
@@ -18,14 +21,18 @@ from apps.formations.exceptions import (
     InvalidFormationMembers,
     InvalidFormationReadiness,
     InvalidFormationStack,
+    InvalidGithubUsername,
     InvalidProjectReadinessSelection,
+    InvalidRepositoryUrl,
     MemberHasActiveProjectRun,
     MemberHasUnresolvedFormation,
     ProjectRunDeadlineNotReached,
     ProjectRunTransitionNotAllowed,
     ReadyCheckExpired,
+    GithubUsernameRequired,
     ReadyCheckNotPending,
     ReadyCheckNotReplaceable,
+    RepositoryAlreadyAssigned,
     SprintAccessDenied,
     SprintDeadlinePassed,
     SprintRuntimeConfigurationError,
@@ -52,6 +59,7 @@ from apps.profiles.models import (
     UserProfile,
     UserSkill,
 )
+from apps.profiles.validators import validate_github_username
 from apps.projects.exceptions import (
     InvalidProjectStackSelection,
     ProjectConfigurationError,
@@ -64,6 +72,9 @@ from apps.projects.services import (
 
 
 EXPECTED_ROLE_CODES = frozenset(RoleCode.values)
+GITHUB_REQUIRED_ROLE_CODES = frozenset(
+    {RoleCode.BACKEND_DEVELOPER, RoleCode.FRONTEND_DEVELOPER}
+)
 
 ALLOWED_SPRINT_TRANSITIONS = {
     SprintRunState.LOCKED: frozenset({SprintRunState.ACTIVE}),
@@ -578,6 +589,26 @@ def _ensure_sprint_runs_locked(*, project_run: ProjectRun) -> list[SprintRun]:
     )
 
 
+def _activate_initial_sprint_for_new_project_run(
+    *,
+    project_run: ProjectRun,
+    sprint_runs: list[SprintRun],
+) -> None:
+    if not sprint_runs:
+        return
+
+    initial_sprint = sprint_runs[0]
+    if (
+        initial_sprint.state != SprintRunState.LOCKED
+        or initial_sprint.opened_at is not None
+    ):
+        raise SprintRuntimeConfigurationError
+
+    initial_sprint.state = SprintRunState.ACTIVE
+    initial_sprint.opened_at = project_run.started_at
+    initial_sprint.save(update_fields=["state", "opened_at", "updated_at"])
+
+
 @transaction.atomic
 def initialize_sprint_runs(*, project_run: ProjectRun) -> list[SprintRun]:
     project_run = (
@@ -614,7 +645,7 @@ def _ensure_team_and_project_run_locked(
         formation=formation,
         defaults={"created_at": started_at},
     )
-    project_run, _ = ProjectRun.objects.get_or_create(
+    project_run, project_run_created = ProjectRun.objects.get_or_create(
         team=team,
         defaults={
             "project_version_id": formation.project_version_id,
@@ -681,11 +712,53 @@ def _ensure_team_and_project_run_locked(
                 for ready_check in current_ready_checks
             ]
         )
-    _ensure_sprint_runs_locked(project_run=project_run)
+    sprint_runs = _ensure_sprint_runs_locked(project_run=project_run)
+    if project_run_created:
+        _activate_initial_sprint_for_new_project_run(
+            project_run=project_run,
+            sprint_runs=sprint_runs,
+        )
     return team, project_run
 
 
-def _respond_to_ready_check(*, ready_check_id, user: User, confirm: bool, now=None):
+def _github_username_for_confirmation(
+    *, ready_check: ReadyCheck, user: User, supplied_username: str | None
+) -> str | None:
+    locked_user = User.objects.select_for_update(of=("self",)).get(id=user.id)
+    if not locked_user.is_active:
+        raise InvalidFormationMembers
+    profile = UserProfile.objects.select_for_update(of=("self",)).get(
+        user=locked_user
+    )
+    if supplied_username == "":
+        raise InvalidGithubUsername
+    candidate = (
+        supplied_username
+        if supplied_username is not None
+        else profile.github_username
+    )
+    if candidate:
+        try:
+            validate_github_username(candidate)
+        except DjangoValidationError as exc:
+            raise InvalidGithubUsername from exc
+    elif ready_check.role.code in GITHUB_REQUIRED_ROLE_CODES:
+        raise GithubUsernameRequired
+
+    if supplied_username is not None and supplied_username != profile.github_username:
+        profile.github_username = supplied_username
+        profile.save(update_fields=["github_username", "updated_at"])
+    return candidate
+
+
+def _respond_to_ready_check(
+    *,
+    ready_check_id,
+    user: User,
+    confirm: bool,
+    github_username: str | None = None,
+    now=None,
+):
     if not user.is_active:
         raise InvalidFormationMembers
     now = now or timezone.now()
@@ -701,7 +774,7 @@ def _respond_to_ready_check(*, ready_check_id, user: User, confirm: bool, now=No
         )
         ready_check = (
             ReadyCheck.objects.select_for_update()
-            .select_related("formation")
+            .select_related("formation", "role")
             .get(
                 id=ready_check_id,
                 formation=formation,
@@ -716,6 +789,12 @@ def _respond_to_ready_check(*, ready_check_id, user: User, confirm: bool, now=No
             ready_check.save(update_fields=["status"])
             expired = True
         else:
+            if confirm:
+                _github_username_for_confirmation(
+                    ready_check=ready_check,
+                    user=user,
+                    supplied_username=github_username,
+                )
             ready_check.status = (
                 ReadyCheckStatus.CONFIRMED if confirm else ReadyCheckStatus.DECLINED
             )
@@ -746,11 +825,14 @@ def _respond_to_ready_check(*, ready_check_id, user: User, confirm: bool, now=No
     return ready_check
 
 
-def confirm_ready_check(*, ready_check_id, user: User, now=None) -> ReadyCheck:
+def confirm_ready_check(
+    *, ready_check_id, user: User, github_username: str | None = None, now=None
+) -> ReadyCheck:
     return _respond_to_ready_check(
         ready_check_id=ready_check_id,
         user=user,
         confirm=True,
+        github_username=github_username,
         now=now,
     )
 
@@ -810,6 +892,86 @@ def replace_ready_check_member(
     )
     _consume_locked_readinesses(readinesses=readinesses)
     return replacement
+
+
+@transaction.atomic
+def update_project_run_repository(
+    *, project_run_id, actor: User, repository_url: str
+) -> ProjectRun:
+    _require_active_staff(actor=actor)
+    normalized_url, repository_identity = _repository_url_identity(repository_url)
+    # This operational endpoint is infrequent. Locking existing ProjectRuns in a
+    # stable order serializes competing assignments made through this service.
+    project_runs = list(
+        ProjectRun.objects.select_for_update(of=("self",))
+        .only("id", "state", "ended_at", "repository_url")
+        .order_by("id")
+    )
+    try:
+        project_run = next(
+            item
+            for item in project_runs
+            if (
+                item.id == project_run_id
+                and item.state == ProjectRunState.ACTIVE
+                and item.ended_at is None
+            )
+        )
+    except StopIteration as exc:
+        raise ProjectRun.DoesNotExist from exc
+
+    for existing_run in project_runs:
+        if existing_run.id == project_run.id or not existing_run.repository_url:
+            continue
+        try:
+            _, existing_identity = _repository_url_identity(
+                existing_run.repository_url
+            )
+        except InvalidRepositoryUrl:
+            # Historical invalid values are outside this write contract; they must
+            # not prevent Staff from correcting another ProjectRun.
+            continue
+        if existing_identity == repository_identity:
+            raise RepositoryAlreadyAssigned
+
+    project_run.repository_url = normalized_url
+    project_run.save(update_fields=["repository_url"])
+    return project_run
+
+
+def _repository_url_identity(
+    repository_url: str,
+) -> tuple[str, tuple[str, int | None, str]]:
+    candidate = repository_url.strip()
+    try:
+        URLValidator(schemes=["http", "https"])(candidate)
+        parsed = urlsplit(candidate)
+        port = parsed.port
+    except (DjangoValidationError, ValueError) as exc:
+        raise InvalidRepositoryUrl from exc
+
+    if parsed.username is not None or parsed.password is not None or not parsed.hostname:
+        raise InvalidRepositoryUrl
+
+    hostname = parsed.hostname.casefold()
+    if hostname == "www.github.com":
+        hostname = "github.com"
+    if port in {80, 443}:
+        port = None
+
+    path = parsed.path.rstrip("/")
+    if path.casefold().endswith(".git"):
+        path = path[:-4]
+    comparison_path = path.casefold() if hostname == "github.com" else path
+
+    storage_host = f"[{hostname}]" if ":" in hostname else hostname
+    if port is not None:
+        storage_host = f"{storage_host}:{port}"
+    storage_path = comparison_path if hostname == "github.com" else path
+    normalized_url = urlunsplit(
+        (parsed.scheme.casefold(), storage_host, storage_path, "", "")
+    )
+    return normalized_url, (hostname, port, comparison_path)
 
 
 def _locked_sprint_run(*, sprint_run_id, project_run_id=None):

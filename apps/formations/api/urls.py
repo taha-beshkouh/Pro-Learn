@@ -16,6 +16,8 @@ from apps.formations.api.views import (
     ReplaceReadyCheckView,
     RequestSprintChangesView,
     OpenSprintView,
+    StaffProjectRunRepositoryDetailView,
+    StaffProjectRunRepositoryListView,
     SubmitSprintView,
     TeamFormationDetailView,
     TeamFormationListCreateView,
@@ -66,6 +68,16 @@ urlpatterns = [
         "project-runs/me/workspace/",
         CurrentProjectRunWorkspaceView.as_view(),
         name="current-project-run-workspace",
+    ),
+    path(
+        "project-runs/",
+        StaffProjectRunRepositoryListView.as_view(),
+        name="staff-project-run-repositories",
+    ),
+    path(
+        "project-runs/<uuid:project_run_id>/repository/",
+        StaffProjectRunRepositoryDetailView.as_view(),
+        name="staff-project-run-repository-detail",
     ),
     path(
         "project-runs/me/sprints/",

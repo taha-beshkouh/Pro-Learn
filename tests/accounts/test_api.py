@@ -149,6 +149,7 @@ def test_register_rejects_mass_assignment_fields(
             "is_staff": True,
             "is_superuser": True,
             "role_id": "00000000-0000-0000-0000-000000000001",
+            "github_username": "registration-is-not-the-collection-point",
         },
         format="json",
         HTTP_X_CSRFTOKEN=csrf_token,
@@ -158,6 +159,7 @@ def test_register_rejects_mass_assignment_fields(
     assert response.data["is_staff"] == ["Unknown field."]
     assert response.data["is_superuser"] == ["Unknown field."]
     assert response.data["role_id"] == ["Unknown field."]
+    assert response.data["github_username"] == ["Unknown field."]
     assert django_user_model.objects.count() == 0
 
 
