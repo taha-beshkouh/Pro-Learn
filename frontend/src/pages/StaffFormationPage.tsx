@@ -8,6 +8,9 @@ import { EmptyState } from '../components/ui/EmptyState'
 import { LoadingState } from '../components/ui/LoadingState'
 import { StatusBadge } from '../components/ui/StatusBadge'
 import { ProjectRunRepositorySection } from '../components/staff/ProjectRunRepositorySection'
+import { StaffReadyCheckReplacementSection } from '../components/staff/StaffReadyCheckReplacementSection'
+import { StaffProjectRunIncompleteSection } from '../components/staff/StaffProjectRunIncompleteSection'
+import { StaffSprintReviewSection } from '../components/staff/StaffSprintReviewSection'
 import { ApiError } from '../lib/api/client'
 import {
   createTeamFormation,
@@ -429,7 +432,10 @@ export function StaffFormationPage() {
           </div>
         </form>
       ) : null}
+      <StaffReadyCheckReplacementSection />
       <ProjectRunRepositorySection />
+      <StaffProjectRunIncompleteSection />
+      <StaffSprintReviewSection />
     </div>
   )
 }

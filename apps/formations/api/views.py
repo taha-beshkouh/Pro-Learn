@@ -2,7 +2,7 @@ from django.core.exceptions import ObjectDoesNotExist
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_protect
 from rest_framework import status
-from rest_framework.exceptions import NotFound, ValidationError
+from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 from rest_framework.permissions import IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -13,7 +13,9 @@ from apps.formations.api.exceptions import (
     ProjectRunConflict,
     SprintConflict,
 )
+from apps.formations.api.permissions import IsActiveAdminUser
 from apps.formations.api.serializers import (
+    CompleteSprintInputSerializer,
     EmptyActionInputSerializer,
     MyReadyCheckSerializer,
     OpenSprintInputSerializer,
@@ -21,31 +23,43 @@ from apps.formations.api.serializers import (
     ProjectReadinessSerializer,
     ProjectRunDashboardSerializer,
     ProjectRunLifecycleSerializer,
+    ProjectRunDesignWorkspaceInputSerializer,
+    ProjectRunDesignWorkspaceSerializer,
     ProjectRunRepositoryInputSerializer,
     ProjectRunWorkspaceSerializer,
     ReadyCheckConfirmInputSerializer,
     ReadyCheckSerializer,
+    RequestSprintChangesInputSerializer,
     ReplacementInputSerializer,
     SprintRunDetailSerializer,
     SprintRunSerializer,
     SprintSubmissionInputSerializer,
     StaffProjectRunRepositorySerializer,
+    StaffSprintRunDetailSerializer,
+    StaffSprintRunListSerializer,
     TeamFormationInputSerializer,
     TeamFormationSerializer,
 )
 from apps.formations.exceptions import (
     ActiveProjectReadinessExists,
+    DesignWorkspaceAccessDenied,
+    DesignWorkspaceRequired,
     FormationAlreadyReady,
     FormationCompletionConflict,
     InvalidFormationMembers,
     InvalidFormationReadiness,
     InvalidFormationStack,
     InvalidGithubUsername,
+    InvalidDesignWorkspaceUrl,
+    InvalidDeploymentUrl,
+    InvalidFinalCommitUrl,
+    InvalidReviewFeedback,
     InvalidProjectReadinessSelection,
     InvalidRepositoryUrl,
     MemberHasActiveProjectRun,
     MemberHasUnresolvedFormation,
     ProjectRunDeadlineNotReached,
+    ProjectRunRepositoryRequired,
     ProjectRunTransitionNotAllowed,
     GithubUsernameRequired,
     ReadyCheckExpired,
@@ -73,7 +87,9 @@ from apps.formations.selectors import (
     current_ready_checks_for_user,
     formation_detail,
     formation_list,
+    project_run_sprints_for_staff,
     ready_check_detail,
+    sprint_run_detail_for_staff,
 )
 from apps.formations.services import (
     confirm_ready_check,
@@ -87,6 +103,7 @@ from apps.formations.services import (
     replace_ready_check_member,
     request_sprint_changes,
     submit_sprint,
+    update_project_run_design_workspace,
     update_project_run_repository,
 )
 from apps.projects.api.exceptions import ProjectConfigurationUnavailable
@@ -414,7 +431,11 @@ class StaffProjectRunRepositoryDetailView(APIView):
             raise NotFound("Active ProjectRun not found.") from exc
         except InvalidRepositoryUrl as exc:
             raise ValidationError(
-                {"repository_url": ["Enter a valid HTTP or HTTPS URL."]}
+                {
+                    "repository_url": [
+                        "Enter a canonical GitHub repository root URL."
+                    ]
+                }
             ) from exc
         except RepositoryAlreadyAssigned as exc:
             raise ValidationError(
@@ -429,6 +450,60 @@ class StaffProjectRunRepositoryDetailView(APIView):
                 active_project_runs_for_staff().get(id=project_run.id)
             ).data
         )
+
+
+class StaffSprintRunListView(APIView):
+    permission_classes = [IsActiveAdminUser]
+
+    def get(self, request, project_run_id):
+        try:
+            sprint_runs = project_run_sprints_for_staff(
+                project_run_id=project_run_id,
+            )
+        except ProjectRun.DoesNotExist as exc:
+            raise NotFound("Project run not found.") from exc
+        return Response(StaffSprintRunListSerializer(sprint_runs, many=True).data)
+
+
+class StaffSprintRunDetailView(APIView):
+    permission_classes = [IsActiveAdminUser]
+
+    def get(self, request, project_run_id, sprint_run_id):
+        try:
+            sprint_run = sprint_run_detail_for_staff(
+                project_run_id=project_run_id,
+                sprint_run_id=sprint_run_id,
+            )
+        except SprintRun.DoesNotExist as exc:
+            raise NotFound("Sprint not found.") from exc
+        return Response(StaffSprintRunDetailSerializer(sprint_run).data)
+
+
+class ProjectRunDesignWorkspaceDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, project_run_id):
+        serializer = ProjectRunDesignWorkspaceInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            project_run = update_project_run_design_workspace(
+                project_run_id=project_run_id,
+                actor=request.user,
+                design_workspace_url=serializer.validated_data[
+                    "design_workspace_url"
+                ],
+            )
+        except ProjectRun.DoesNotExist as exc:
+            raise NotFound("Active ProjectRun not found.") from exc
+        except DesignWorkspaceAccessDenied as exc:
+            raise PermissionDenied(
+                "Only the current Product Designer or Staff may update this field."
+            ) from exc
+        except InvalidDesignWorkspaceUrl as exc:
+            raise ValidationError(
+                {"design_workspace_url": ["Enter a valid design workspace URL."]}
+            ) from exc
+        return Response(ProjectRunDesignWorkspaceSerializer(project_run).data)
 
 
 class CurrentProjectRunSprintListView(CurrentProjectRunMixin, APIView):
@@ -510,6 +585,8 @@ class SubmitSprintView(APIView):
                 sprint_run_id=sprint_run_id,
                 user=request.user,
                 evidence=serializer.validated_data["evidence"],
+                final_commit_url=serializer.validated_data["final_commit_url"],
+                deployment_url=serializer.validated_data["deployment_url"],
             )
         except (ProjectRun.DoesNotExist, SprintRun.DoesNotExist) as exc:
             raise NotFound("Sprint not found.") from exc
@@ -519,20 +596,43 @@ class SubmitSprintView(APIView):
             SprintTransitionNotAllowed,
         ) as exc:
             raise _sprint_transition_error(exc) from exc
+        except ProjectRunRepositoryRequired as exc:
+            raise SprintConflict(
+                "The canonical ProjectRun repository has not been configured."
+            ) from exc
+        except DesignWorkspaceRequired as exc:
+            raise SprintConflict(
+                "The current design workspace has not been configured."
+            ) from exc
+        except InvalidFinalCommitUrl as exc:
+            raise ValidationError(
+                {
+                    "final_commit_url": [
+                        "Enter an exact commit URL from this ProjectRun repository."
+                    ]
+                }
+            ) from exc
+        except InvalidDeploymentUrl as exc:
+            raise ValidationError(
+                {"deployment_url": ["Enter a valid deployment URL."]}
+            ) from exc
         return Response(SprintRunSerializer(sprint_run).data)
 
 
 class StaffSprintTransitionView(APIView):
     permission_classes = [IsAdminUser]
     service = None
+    input_serializer_class = EmptyActionInputSerializer
 
     def post(self, request, project_run_id, sprint_run_id):
-        _empty_action_data(request)
+        serializer = self.input_serializer_class(data=request.data)
+        serializer.is_valid(raise_exception=True)
         try:
             sprint_run = self.service(
                 project_run_id=project_run_id,
                 sprint_run_id=sprint_run_id,
                 actor=request.user,
+                **serializer.validated_data,
             )
         except (ProjectRun.DoesNotExist, SprintRun.DoesNotExist) as exc:
             raise NotFound("Sprint not found.") from exc
@@ -543,6 +643,10 @@ class StaffSprintTransitionView(APIView):
             SprintTransitionNotAllowed,
         ) as exc:
             raise _sprint_transition_error(exc) from exc
+        except InvalidReviewFeedback as exc:
+            raise ValidationError(
+                {"feedback": ["Enter meaningful review feedback."]}
+            ) from exc
         return Response(SprintRunSerializer(sprint_run).data)
 
 
@@ -573,7 +677,9 @@ class MarkSprintUnderReviewView(StaffSprintTransitionView):
 
 class RequestSprintChangesView(StaffSprintTransitionView):
     service = staticmethod(request_sprint_changes)
+    input_serializer_class = RequestSprintChangesInputSerializer
 
 
 class CompleteSprintView(StaffSprintTransitionView):
     service = staticmethod(complete_sprint)
+    input_serializer_class = CompleteSprintInputSerializer

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
+import { DesignWorkspaceSection } from '../components/workspace/DesignWorkspaceSection'
 import { Alert } from '../components/ui/Alert'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
@@ -360,12 +361,25 @@ function WorkspaceNavigation({ view }: { view: WorkspaceViewModel }) {
   )
 }
 
-function WorkspaceContent({ data }: { data: ProjectRunWorkspaceResponse }) {
+function WorkspaceContent({
+  data,
+  onDesignWorkspaceSaved,
+}: {
+  data: ProjectRunWorkspaceResponse
+  onDesignWorkspaceSaved: () => void
+}) {
   const view = useMemo(() => buildWorkspaceViewModel(data), [data])
   return (
     <div className="workspace-page" dir="rtl">
       <ProjectContext view={view} />
       <ProjectRepository repositoryUrl={data.repository_url} />
+      <DesignWorkspaceSection
+        projectRunId={data.id}
+        url={data.design_workspace_url}
+        memberRoleCode={data.membership.role.code}
+        runState={data.state}
+        onSaved={onDesignWorkspaceSaved}
+      />
       <div className="workspace__sprint-layout">
         <CurrentSprint view={view} />
         <SprintJourney view={view} />
@@ -440,5 +454,5 @@ export function WorkspacePage() {
     )
   }
 
-  return <WorkspaceContent data={loadState.data} />
+  return <WorkspaceContent data={loadState.data} onDesignWorkspaceSaved={retry} />
 }

@@ -25,9 +25,12 @@ from apps.formations.services import (
     mark_sprint_under_review,
     open_sprint,
     request_sprint_changes,
-    submit_sprint,
 )
 from apps.profiles.models import RoleCode, UserProfile
+from tests.formations.structured_submission import (
+    configure_submission_runtime,
+    submit_structured_sprint as submit_sprint,
+)
 
 
 pytestmark = [pytest.mark.django_db, pytest.mark.postgresql]
@@ -181,7 +184,11 @@ def test_submission_review_changes_resubmission_and_completion_flow(
     assert submitted.state == SprintRunState.SUBMITTED
     assert submitted.completed_at is None
     mark_sprint_under_review(sprint_run_id=first.id, actor=facilitator)
-    request_sprint_changes(sprint_run_id=first.id, actor=facilitator)
+    request_sprint_changes(
+        sprint_run_id=first.id,
+        actor=facilitator,
+        feedback="Correct the first submission.",
+    )
     resubmitted, second_submission = submit_sprint(
         sprint_run_id=first.id,
         user=frontend.user,
@@ -200,6 +207,86 @@ def test_submission_review_changes_resubmission_and_completion_flow(
     completed = complete_sprint(sprint_run_id=first.id, actor=facilitator)
     assert completed.state == SprintRunState.COMPLETED
     assert completed.completed_at is not None
+
+
+def test_submitted_sprint_accepts_append_only_pre_review_replacement(
+    runtime_project_run,
+    runtime_members,
+):
+    first = _ordered_sprints(runtime_project_run)[0]
+    backend = runtime_members["BACKEND_DEVELOPER"]
+    frontend = runtime_members["FRONTEND_DEVELOPER"]
+    initial_time = first.opened_at + timedelta(hours=1)
+    replacement_time = initial_time + timedelta(minutes=30)
+
+    submitted, initial = submit_sprint(
+        sprint_run_id=first.id,
+        user=backend.user,
+        evidence="Initial review candidate",
+        now=initial_time,
+    )
+    sprint_updated_at = submitted.updated_at
+    initial_snapshot = {
+        "submitted_by_id": initial.submitted_by_id,
+        "evidence": initial.evidence,
+        "submitted_at": initial.submitted_at,
+    }
+
+    replaced, replacement = submit_sprint(
+        sprint_run_id=first.id,
+        user=frontend.user,
+        evidence="New pre-review candidate",
+        now=replacement_time,
+    )
+
+    assert replaced.state == SprintRunState.SUBMITTED
+    assert replaced.updated_at == sprint_updated_at
+    assert replaced.designated_submitter_id is None
+    assert replacement.id != initial.id
+    assert replacement.submitted_by_id == frontend.id
+    initial.refresh_from_db()
+    assert {
+        "submitted_by_id": initial.submitted_by_id,
+        "evidence": initial.evidence,
+        "submitted_at": initial.submitted_at,
+    } == initial_snapshot
+    history = list(SprintSubmission.objects.filter(sprint_run=first))
+    assert history == [initial, replacement]
+    assert history[-1].evidence == "New pre-review candidate"
+
+
+def test_submission_rejects_locked_under_review_and_completed_sprints(
+    runtime_project_run,
+    runtime_members,
+    facilitator,
+):
+    first, locked, _ = _ordered_sprints(runtime_project_run)
+    backend = runtime_members["BACKEND_DEVELOPER"]
+
+    with pytest.raises(SprintTransitionNotAllowed):
+        submit_sprint(sprint_run_id=locked.id, user=backend.user)
+
+    submit_sprint(
+        sprint_run_id=first.id,
+        user=backend.user,
+        evidence="Only valid submission",
+    )
+    mark_sprint_under_review(sprint_run_id=first.id, actor=facilitator)
+    with pytest.raises(SprintTransitionNotAllowed):
+        submit_sprint(sprint_run_id=first.id, user=backend.user)
+
+    complete_sprint(sprint_run_id=first.id, actor=facilitator)
+    with pytest.raises(SprintTransitionNotAllowed):
+        submit_sprint(sprint_run_id=first.id, user=backend.user)
+
+    first.refresh_from_db()
+    locked.refresh_from_db()
+    assert first.state == SprintRunState.COMPLETED
+    assert list(first.submissions.values_list("evidence", flat=True)) == [
+        "Only valid submission"
+    ]
+    assert locked.state == SprintRunState.LOCKED
+    assert locked.submissions.count() == 0
 
 
 def test_only_staff_manage_and_only_current_members_submit(
@@ -354,11 +441,11 @@ def test_early_or_late_completion_does_not_move_future_schedule(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_concurrent_submission_by_two_current_members_creates_one_history_row(
+def test_concurrent_submission_by_two_current_members_preserves_both_snapshots(
     runtime_project_run,
     runtime_members,
-    facilitator,
 ):
+    configure_submission_runtime(runtime_project_run)
     first = _ordered_sprints(runtime_project_run)[0]
     backend = runtime_members["BACKEND_DEVELOPER"]
     frontend = runtime_members["FRONTEND_DEVELOPER"]
@@ -369,14 +456,11 @@ def test_concurrent_submission_by_two_current_members_creates_one_history_row(
         try:
             barrier.wait(timeout=5)
             user = type(backend.user).objects.get(id=user_id)
-            try:
-                submit_sprint(
-                    sprint_run_id=first.id,
-                    user=user,
-                    evidence=f"Concurrent evidence from {user_id}",
-                )
-            except SprintTransitionNotAllowed:
-                return "rejected"
+            submit_sprint(
+                sprint_run_id=first.id,
+                user=user,
+                evidence=f"Concurrent evidence from {user_id}",
+            )
             return "submitted"
         finally:
             close_old_connections()
@@ -384,7 +468,75 @@ def test_concurrent_submission_by_two_current_members_creates_one_history_row(
     with ThreadPoolExecutor(max_workers=2) as executor:
         results = list(executor.map(submit_once, (backend.user_id, frontend.user_id)))
 
-    assert sorted(results) == ["rejected", "submitted"]
+    assert results == ["submitted", "submitted"]
     submissions = SprintSubmission.objects.filter(sprint_run=first)
-    assert submissions.count() == 1
-    assert submissions.get().submitted_by_id in {backend.id, frontend.id}
+    assert submissions.count() == 2
+    assert set(submissions.values_list("submitted_by_id", flat=True)) == {
+        backend.id,
+        frontend.id,
+    }
+    first.refresh_from_db()
+    assert first.state == SprintRunState.SUBMITTED
+
+
+@pytest.mark.django_db(transaction=True)
+def test_pre_review_replacement_races_safely_with_staff_start_review(
+    runtime_project_run,
+    runtime_members,
+    facilitator,
+):
+    configure_submission_runtime(runtime_project_run)
+    first = _ordered_sprints(runtime_project_run)[0]
+    backend = runtime_members["BACKEND_DEVELOPER"]
+    frontend = runtime_members["FRONTEND_DEVELOPER"]
+    submit_sprint(
+        sprint_run_id=first.id,
+        user=backend.user,
+        evidence="Initial review candidate",
+    )
+    barrier = Barrier(2)
+
+    def replace_submission():
+        close_old_connections()
+        try:
+            user = type(frontend.user).objects.get(id=frontend.user_id)
+            barrier.wait(timeout=5)
+            try:
+                submit_sprint(
+                    sprint_run_id=first.id,
+                    user=user,
+                    evidence="Concurrent replacement candidate",
+                )
+            except SprintTransitionNotAllowed:
+                return "rejected-after-review"
+            return "replacement-created"
+        finally:
+            close_old_connections()
+
+    def start_review():
+        close_old_connections()
+        try:
+            actor = type(facilitator).objects.get(id=facilitator.id)
+            barrier.wait(timeout=5)
+            mark_sprint_under_review(sprint_run_id=first.id, actor=actor)
+            return "review-started"
+        finally:
+            close_old_connections()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        replacement_future = executor.submit(replace_submission)
+        review_future = executor.submit(start_review)
+        replacement_result = replacement_future.result()
+        review_result = review_future.result()
+
+    assert review_result == "review-started"
+    assert replacement_result in {"replacement-created", "rejected-after-review"}
+    first.refresh_from_db()
+    assert first.state == SprintRunState.UNDER_REVIEW
+    history = list(SprintSubmission.objects.filter(sprint_run=first))
+    if replacement_result == "replacement-created":
+        assert len(history) == 2
+        assert history[-1].evidence == "Concurrent replacement candidate"
+    else:
+        assert len(history) == 1
+        assert history[-1].evidence == "Initial review candidate"

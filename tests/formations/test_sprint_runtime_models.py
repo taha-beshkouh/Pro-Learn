@@ -17,11 +17,16 @@ from apps.formations.services import (
     confirm_ready_check,
     create_team_formation,
     mark_sprint_under_review,
+    open_sprint,
     request_sprint_changes,
-    submit_sprint,
 )
 from apps.profiles.models import RoleCode, UserProfile
 from apps.projects.models import ProjectVersion, SprintTemplate
+from tests.formations.structured_submission import (
+    configure_submission_runtime,
+    structured_submission_kwargs,
+    submit_structured_sprint as submit_sprint,
+)
 
 
 pytestmark = [pytest.mark.django_db, pytest.mark.postgresql]
@@ -158,6 +163,7 @@ def test_database_accepts_full_valid_state_flow_without_designation(
     changes_requested = request_sprint_changes(
         sprint_run_id=first.id,
         actor=facilitator,
+        feedback="Correct the reviewed submission.",
     )
     assert changes_requested.state == SprintRunState.CHANGES_REQUESTED
     assert changes_requested.designated_submitter_id is None
@@ -177,28 +183,83 @@ def test_database_accepts_full_valid_state_flow_without_designation(
     assert completed.designated_submitter_id is None
 
 
+def test_database_accepts_new_submission_while_sprint_is_already_submitted(
+    runtime_project_run,
+    runtime_members,
+):
+    first = _ordered_sprints(runtime_project_run)[0]
+    backend = runtime_members["BACKEND_DEVELOPER"]
+    frontend = runtime_members["FRONTEND_DEVELOPER"]
+    configure_submission_runtime(runtime_project_run)
+    _, initial = submit_sprint(
+        sprint_run_id=first.id,
+        user=backend.user,
+        evidence="Initial database snapshot",
+    )
+    initial_snapshot = (
+        initial.submitted_by_id,
+        initial.evidence,
+        initial.submitted_at,
+    )
+
+    replacement = SprintSubmission.objects.create(
+        sprint_run=first,
+        submitted_by=frontend,
+        evidence="Replacement accepted by insert trigger",
+        submitted_at=initial.submitted_at + timedelta(microseconds=1),
+        design_url_snapshot=runtime_project_run.design_workspace_url,
+        **structured_submission_kwargs(
+            project_run=runtime_project_run,
+            sprint_run_id=first.id,
+            revision_character="b",
+        ),
+    )
+
+    first.refresh_from_db()
+    initial.refresh_from_db()
+    assert first.state == SprintRunState.SUBMITTED
+    assert (
+        initial.submitted_by_id,
+        initial.evidence,
+        initial.submitted_at,
+    ) == initial_snapshot
+    assert list(first.submissions.all()) == [initial, replacement]
+
+
 def test_database_keeps_sprint_timestamp_invariants_without_designation(
     runtime_project_run,
+    runtime_members,
+    facilitator,
 ):
     first, second, _ = _ordered_sprints(runtime_project_run)
+    backend = runtime_members["BACKEND_DEVELOPER"]
+
+    first_opened_at = first.opened_at
+    assert first_opened_at == runtime_project_run.started_at
+    assert first.designated_submitter_id is None
+    submit_sprint(sprint_run_id=first.id, user=backend.user)
+    mark_sprint_under_review(sprint_run_id=first.id, actor=facilitator)
+    complete_sprint(sprint_run_id=first.id, actor=facilitator)
 
     with pytest.raises(IntegrityError) as missing_opened_at, transaction.atomic():
         SprintRun.objects.filter(id=second.id).update(state=SprintRunState.ACTIVE)
     assert "formations_sprint_state_timestamps_valid" in str(missing_opened_at.value)
 
-    opened_at = first.opened_at
-    assert opened_at == runtime_project_run.started_at
-    SprintRun.objects.filter(id=first.id).update(state=SprintRunState.SUBMITTED)
-    SprintRun.objects.filter(id=first.id).update(state=SprintRunState.UNDER_REVIEW)
+    opened_at = timezone.now()
+    open_sprint(sprint_run_id=second.id, actor=facilitator, now=opened_at)
+    second.refresh_from_db()
+    assert second.designated_submitter_id is None
+    submit_sprint(sprint_run_id=second.id, user=backend.user)
+    mark_sprint_under_review(sprint_run_id=second.id, actor=facilitator)
 
     with pytest.raises(IntegrityError) as missing_completed_at, transaction.atomic():
-        SprintRun.objects.filter(id=first.id).update(state=SprintRunState.COMPLETED)
+        SprintRun.objects.filter(id=second.id).update(state=SprintRunState.COMPLETED)
     assert "formations_sprint_state_timestamps_valid" in str(
         missing_completed_at.value
     )
 
     with pytest.raises(IntegrityError) as completion_before_open, transaction.atomic():
-        SprintRun.objects.filter(id=first.id).update(
+        SprintRun.objects.filter(id=second.id).update(
             state=SprintRunState.COMPLETED,
             completed_at=opened_at - timedelta(microseconds=1),
         )
@@ -215,6 +276,7 @@ def test_database_rejects_submission_by_member_of_another_project_run(
     password,
 ):
     first = _ordered_sprints(runtime_project_run)[0]
+    configure_submission_runtime(runtime_project_run)
     other_run = _create_other_project_run(
         facilitator=facilitator,
         django_user_model=django_user_model,
@@ -230,6 +292,11 @@ def test_database_rejects_submission_by_member_of_another_project_run(
                 sprint_run=first,
                 submitted_by=other_member,
                 evidence="Cross-run evidence",
+                design_url_snapshot=runtime_project_run.design_workspace_url,
+                **structured_submission_kwargs(
+                    project_run=runtime_project_run,
+                    sprint_run_id=first.id,
+                ),
             )
 
 
@@ -265,6 +332,7 @@ def test_database_rejects_submission_by_non_current_member(
     facilitator,
 ):
     first = _ordered_sprints(runtime_project_run)[0]
+    configure_submission_runtime(runtime_project_run)
     backend = runtime_members["BACKEND_DEVELOPER"]
 
     with pytest.raises(IntegrityError, match="Invalid Sprint submission"):
@@ -274,6 +342,11 @@ def test_database_rejects_submission_by_non_current_member(
                 sprint_run=first,
                 submitted_by=backend,
                 evidence="Ended membership evidence",
+                design_url_snapshot=runtime_project_run.design_workspace_url,
+                **structured_submission_kwargs(
+                    project_run=runtime_project_run,
+                    sprint_run_id=first.id,
+                ),
             )
 
 

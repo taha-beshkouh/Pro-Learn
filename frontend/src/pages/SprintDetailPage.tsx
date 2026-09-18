@@ -25,6 +25,7 @@ import type {
   SprintRunDetailResponse,
   SprintSubmissionResponse,
 } from '../lib/api/types'
+import { loadWorkspace } from '../lib/api/workspace'
 import {
   buildSprintDetailViewModel,
   type SprintDetailAction,
@@ -60,7 +61,43 @@ function sprintDetailErrorMessage(error: unknown) {
   return 'ارتباط با سرور برقرار نشد. اتصال اینترنت را بررسی و دوباره تلاش کنید.'
 }
 
-function submissionErrorMessage(error: unknown) {
+function missingDesignWorkspaceMessage(memberRoleCode: string | null) {
+  if (memberRoleCode === 'PRODUCT_DESIGNER') {
+    return 'فضای طراحی پروژه هنوز تنظیم نشده است. شما می‌توانید لینک آن را در Workspace ثبت کنید.'
+  }
+  if (memberRoleCode) {
+    return 'طراح محصول هنوز فضای طراحی پروژه را تنظیم نکرده است. شما امکان تغییر آن را ندارید؛ پس از ثبت لینک، ارسال مدارک اسپرینت ممکن می‌شود.'
+  }
+  return 'فضای طراحی پروژه هنوز تنظیم نشده است. طراح محصول می‌تواند لینک آن را در Workspace ثبت کند.'
+}
+
+function isBasicHttpUrl(value: string) {
+  try {
+    const parsed = new URL(value)
+    return (
+      (parsed.protocol === 'http:' || parsed.protocol === 'https:') &&
+      Boolean(parsed.hostname) &&
+      !parsed.username &&
+      !parsed.password
+    )
+  } catch {
+    return false
+  }
+}
+
+function submissionFieldError(finalCommitUrl: string, deploymentUrl: string) {
+  if (!finalCommitUrl) return 'آدرس کامیت نهایی الزامی است.'
+  if (finalCommitUrl.length > 500 || !isBasicHttpUrl(finalCommitUrl)) {
+    return 'آدرس کامیت نهایی باید یک URL کامل HTTP یا HTTPS باشد.'
+  }
+  if (!deploymentUrl) return 'آدرس نسخه استقرار الزامی است.'
+  if (deploymentUrl.length > 500 || !isBasicHttpUrl(deploymentUrl)) {
+    return 'آدرس نسخه استقرار باید یک URL کامل HTTP یا HTTPS باشد.'
+  }
+  return null
+}
+
+function submissionErrorMessage(error: unknown, memberRoleCode: string | null) {
   if (error instanceof SprintDetailContractError) {
     return 'شناسه ProjectRun جاری از پاسخ سرور قابل دریافت نبود. صفحه را دوباره بارگذاری کنید.'
   }
@@ -69,7 +106,15 @@ function submissionErrorMessage(error: unknown) {
       return 'نشست شما پایان یافته است. برای ادامه دوباره وارد شوید.'
     }
     if (error.status === 400) {
-      return 'اطلاعات ارسال معتبر نیست. متن مدرک را بررسی کنید.'
+      if (error.data && typeof error.data === 'object') {
+        if ('final_commit_url' in error.data) {
+          return 'آدرس کامیت نهایی باید به یک کامیت معتبر در مخزن همین ProjectRun اشاره کند.'
+        }
+        if ('deployment_url' in error.data) {
+          return 'آدرس نسخه استقرار معتبر نیست. یک URL کامل HTTP یا HTTPS وارد کنید.'
+        }
+      }
+      return 'اطلاعات ارسال معتبر نیست. آدرس کامیت نهایی و نسخه استقرار را بررسی کنید.'
     }
     if (error.status === 403 || error.status === 404) {
       return 'عضویت یا دسترسی شما برای این اسپرینت تأیید نشد.'
@@ -78,6 +123,12 @@ function submissionErrorMessage(error: unknown) {
       const payload = JSON.stringify(error.data ?? '').toLowerCase()
       if (payload.includes('deadline')) {
         return 'مهلت ProjectRun به پایان رسیده و ارسال جدید پذیرفته نشد.'
+      }
+      if (payload.includes('repository')) {
+        return 'مخزن رسمی ProjectRun هنوز تنظیم نشده است؛ با تیم PROLEARN هماهنگ کنید.'
+      }
+      if (payload.includes('design workspace')) {
+        return missingDesignWorkspaceMessage(memberRoleCode)
       }
       return 'وضعیت اسپرینت تغییر کرده و این ارسال دیگر مجاز نیست. اطلاعات تازه از سرور دریافت شد.'
     }
@@ -160,6 +211,30 @@ function ProjectRepository({ repositoryUrl }: { repositoryUrl: string | null }) 
   )
 }
 
+function ProjectDesignWorkspace({
+  designWorkspaceUrl,
+  memberRoleCode,
+}: {
+  designWorkspaceUrl: string | null
+  memberRoleCode: string | null
+}) {
+  return (
+    <section className="sprint-detail__repository" aria-labelledby="sprint-design-title">
+      <div>
+        <p className="sprint-detail__section-kicker">مرجع طراحی جاری ProjectRun</p>
+        <h2 id="sprint-design-title">فضای طراحی پروژه</h2>
+      </div>
+      {designWorkspaceUrl ? (
+        <a href={designWorkspaceUrl} target="_blank" rel="noopener noreferrer" dir="ltr">
+          {designWorkspaceUrl}
+        </a>
+      ) : (
+        <p>{missingDesignWorkspaceMessage(memberRoleCode)}</p>
+      )}
+    </section>
+  )
+}
+
 function WorkItemMetadata({ item }: { item: ProjectWorkItem }) {
   if (!item.role && !item.technology_stack) return null
   return (
@@ -209,6 +284,7 @@ function WorkItems({ items }: { items: ProjectWorkItem[] }) {
 }
 
 function SubmissionItem({ submission }: { submission: SprintSubmissionResponse }) {
+  const review = submission.review_decision
   return (
     <li>
       <header>
@@ -218,9 +294,52 @@ function SubmissionItem({ submission }: { submission: SprintSubmissionResponse }
         </div>
         <DateValue value={submission.submitted_at} empty="زمان ثبت نشده" />
       </header>
+      <dl className="sprint-detail__submission-links">
+        {submission.final_commit_url && (
+          <div>
+            <dt>کامیت نهایی</dt>
+            <dd>
+              <a href={submission.final_commit_url} target="_blank" rel="noreferrer" dir="ltr">
+                {submission.final_commit_url}
+              </a>
+            </dd>
+          </div>
+        )}
+        {submission.deployment_url && (
+          <div>
+            <dt>نسخه استقرار</dt>
+            <dd>
+              <a href={submission.deployment_url} target="_blank" rel="noreferrer" dir="ltr">
+                {submission.deployment_url}
+              </a>
+            </dd>
+          </div>
+        )}
+        {submission.design_url_snapshot && (
+          <div>
+            <dt>نسخه فضای طراحی</dt>
+            <dd>
+              <a href={submission.design_url_snapshot} target="_blank" rel="noreferrer" dir="ltr">
+                {submission.design_url_snapshot}
+              </a>
+            </dd>
+          </div>
+        )}
+      </dl>
       <p dir="auto">
         {submission.evidence || 'برای این ارسال توضیح یا مدرکی ثبت نشده است.'}
       </p>
+      {review && (
+        <section className="sprint-detail__review" aria-label="نتیجه بررسی این ارسال">
+          <h4>
+            {review.decision === 'CHANGES_REQUESTED'
+              ? 'اصلاحات درخواست‌شده'
+              : 'ارسال تأیید شد'}
+          </h4>
+          <p>زمان بررسی: <DateValue value={review.reviewed_at} empty="ثبت نشده" /></p>
+          {review.feedback.trim() && <p dir="auto">بازخورد: {review.feedback}</p>}
+        </section>
+      )}
     </li>
   )
 }
@@ -273,44 +392,82 @@ function SubmissionHistory({
 
 function SubmissionForm({
   action,
-  evidence,
+  repositoryUrl,
+  designWorkspaceUrl,
   pending,
-  onEvidenceChange,
   onSubmit,
 }: {
   action: Exclude<SprintDetailAction, null>
-  evidence: string
+  repositoryUrl: string | null
+  designWorkspaceUrl: string | null
   pending: boolean
-  onEvidenceChange: (value: string) => void
   onSubmit: (event: FormEvent<HTMLFormElement>) => void
 }) {
   const isResubmission = action === 'resubmit'
+  const isUpdate = action === 'update'
+  const missingPrerequisite = !repositoryUrl || !designWorkspaceUrl
   return (
     <Card className="sprint-detail__submission">
-      <form onSubmit={onSubmit} aria-busy={pending}>
+      <form onSubmit={onSubmit} aria-busy={pending} noValidate>
         <div>
           <p className="sprint-detail__section-kicker">اقدام عضو تیم</p>
-          <h2>{isResubmission ? 'ارسال مجدد اسپرینت' : 'ارسال اسپرینت'}</h2>
+          <h2>
+            {isResubmission
+              ? 'ارسال مجدد اسپرینت'
+              : isUpdate
+                ? 'به‌روزرسانی ارسال'
+                : 'ارسال اسپرینت'}
+          </h2>
           <p>
             هویت ارسال‌کننده از نشست شما تعیین می‌شود. متن مدرک اختیاری است و هیچ شناسه یا زمان‌بندی‌ای از مرورگر ارسال نمی‌شود.
           </p>
+          {isUpdate && <p>به‌روزرسانی، یک ارسال جدید می‌سازد و ارسال‌های قبلی را تغییر نمی‌دهد.</p>}
         </div>
-        <label htmlFor="sprint-evidence">مدرک یا توضیح ارسال</label>
+        <p className="sprint-detail__submission-context">
+          کامیت باید از مخزن همین ProjectRun باشد. Snapshot طراحی هنگام ثبت از فضای طراحی جاری پروژه توسط سرور گرفته می‌شود.
+        </p>
+        {!repositoryUrl && <Alert tone="info">مخزن رسمی پروژه هنوز توسط تیم PROLEARN تنظیم نشده است. پس از آماده‌شدن آن می‌توانید مدارک اسپرینت را ارسال کنید.</Alert>}
+        {!designWorkspaceUrl && <Alert tone="info">ارسال مدارک تا ثبت فضای طراحی پروژه غیرفعال است.</Alert>}
+        {!designWorkspaceUrl && <Link to="/workspace">بررسی فضای طراحی در Workspace</Link>}
+        <label htmlFor="sprint-final-commit">آدرس کامیت نهایی</label>
+        <input
+          id="sprint-final-commit"
+          name="final_commit_url"
+          type="url"
+          placeholder="https://github.com/org/repository/commit/..."
+          required
+          maxLength={500}
+          disabled={pending}
+          dir="ltr"
+        />
+        <label htmlFor="sprint-deployment">آدرس نسخه استقرار</label>
+        <input
+          id="sprint-deployment"
+          name="deployment_url"
+          type="url"
+          placeholder="https://project.example.com"
+          required
+          maxLength={500}
+          disabled={pending}
+          dir="ltr"
+        />
+        <label htmlFor="sprint-evidence">یادداشت اختیاری</label>
         <textarea
           id="sprint-evidence"
-          value={evidence}
-          onChange={(event) => onEvidenceChange(event.target.value)}
-          placeholder="توضیح کوتاه یا مرجع موجود را وارد کنید (اختیاری)"
+          name="evidence"
+          placeholder="در صورت نیاز، توضیح کوتاهی برای این ارسال بنویسید"
           rows={5}
           disabled={pending}
           dir="auto"
         />
-        <Button type="submit" disabled={pending}>
+        <Button type="submit" disabled={pending || missingPrerequisite}>
           {pending
             ? 'در حال ثبت...'
             : isResubmission
               ? 'ثبت ارسال مجدد'
-              : 'ثبت ارسال اسپرینت'}
+              : isUpdate
+                ? 'ثبت نسخه جدیدتر'
+                : 'ثبت ارسال اسپرینت'}
         </Button>
       </form>
     </Card>
@@ -319,19 +476,17 @@ function SubmissionForm({
 
 function SprintDetailContent({
   data,
-  evidence,
   pending,
   submissionError,
   submissionSuccess,
-  onEvidenceChange,
+  designWorkspaceRole,
   onSubmit,
 }: {
   data: SprintRunDetailResponse
-  evidence: string
   pending: boolean
   submissionError: string | null
   submissionSuccess: string | null
-  onEvidenceChange: (value: string) => void
+  designWorkspaceRole: string | null
   onSubmit: (event: FormEvent<HTMLFormElement>) => void
 }) {
   const view = useMemo(() => buildSprintDetailViewModel(data), [data])
@@ -346,21 +501,36 @@ function SprintDetailContent({
         {view.notice}
       </Alert>
       <ProjectRepository repositoryUrl={view.sprint.repository_url} />
+      <ProjectDesignWorkspace
+        designWorkspaceUrl={view.sprint.design_workspace_url}
+        memberRoleCode={designWorkspaceRole}
+      />
       <WorkItems items={view.workItems} />
       <SubmissionHistory
         latestSubmission={view.latestSubmission}
         historicalSubmissions={view.historicalSubmissions}
       />
+      {view.currentChangesDecision && (
+        <section
+          className="sprint-detail__current-feedback"
+          aria-label="بازخورد اصلاحات جاری"
+        >
+          <h2>اصلاحات درخواست‌شده</h2>
+          <p dir="auto">{view.currentChangesDecision.feedback}</p>
+          <p>پس از انجام اصلاحات، نسخه جدید را با فرم ارسال مجدد ثبت کنید.</p>
+        </section>
+      )}
       {submissionError && <Alert tone="error">{submissionError}</Alert>}
       {submissionSuccess && (
         <Alert tone="success" role="status">{submissionSuccess}</Alert>
       )}
       {view.action && (
         <SubmissionForm
+          key={view.sprint.id}
           action={view.action}
-          evidence={evidence}
+          repositoryUrl={view.sprint.repository_url}
+          designWorkspaceUrl={view.sprint.design_workspace_url}
           pending={pending}
-          onEvidenceChange={onEvidenceChange}
           onSubmit={onSubmit}
         />
       )}
@@ -380,10 +550,13 @@ export function SprintDetailPage() {
     requestedId: sprintRunId ?? null,
   })
   const [reloadKey, setReloadKey] = useState(0)
-  const [evidence, setEvidence] = useState('')
   const [submissionPending, setSubmissionPending] = useState(false)
   const [submissionError, setSubmissionError] = useState<string | null>(null)
   const [submissionSuccess, setSubmissionSuccess] = useState<string | null>(null)
+  const [designWorkspaceRoleContext, setDesignWorkspaceRoleContext] = useState<{
+    sprintRunId: string
+    code: string
+  } | null>(null)
   const submissionPendingRef = useRef(false)
   const submissionControllerRef = useRef<AbortController | null>(null)
 
@@ -412,6 +585,34 @@ export function SprintDetailPage() {
 
   useEffect(() => () => submissionControllerRef.current?.abort(), [])
 
+  const needsDesignWorkspaceRole =
+    loadState.status === 'success' &&
+    loadState.requestedId === sprintRunId &&
+    loadState.data.design_workspace_url === null
+
+  useEffect(() => {
+    if (!needsDesignWorkspaceRole || !sprintRunId) return
+    const controller = new AbortController()
+    void loadWorkspace(controller.signal)
+      .then((workspace) => {
+        if (!controller.signal.aborted && workspace?.sprints.some((item) => item.id === sprintRunId)) {
+          setDesignWorkspaceRoleContext({
+            sprintRunId,
+            code: workspace.membership.role.code,
+          })
+        }
+      })
+      .catch(() => {
+        // Sprint Detail remains readable if supplemental Workspace context is unavailable.
+      })
+    return () => controller.abort()
+  }, [needsDesignWorkspaceRole, sprintRunId])
+
+  const designWorkspaceRole =
+    designWorkspaceRoleContext && designWorkspaceRoleContext.sprintRunId === sprintRunId
+      ? designWorkspaceRoleContext.code
+      : null
+
   function retry() {
     setSubmissionError(null)
     setSubmissionSuccess(null)
@@ -439,7 +640,19 @@ export function SprintDetailPage() {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!sprintRunId || submissionPendingRef.current) return
+    if (!sprintRunId || submissionPendingRef.current || loadState.status !== 'success') return
+    if (!buildSprintDetailViewModel(loadState.data).action) return
+    if (!loadState.data.repository_url || !loadState.data.design_workspace_url) return
+    const form = event.currentTarget
+    const fields = new FormData(form)
+    const normalizedCommitUrl = String(fields.get('final_commit_url') ?? '').trim()
+    const normalizedDeploymentUrl = String(fields.get('deployment_url') ?? '').trim()
+    const evidence = String(fields.get('evidence') ?? '')
+    const fieldError = submissionFieldError(normalizedCommitUrl, normalizedDeploymentUrl)
+    if (fieldError) {
+      setSubmissionError(fieldError)
+      return
+    }
     submissionPendingRef.current = true
     setSubmissionPending(true)
     setSubmissionError(null)
@@ -454,21 +667,25 @@ export function SprintDetailPage() {
     try {
       await submitSprintEvidence({
         sprintRunId,
+        finalCommitUrl: normalizedCommitUrl,
+        deploymentUrl: normalizedDeploymentUrl,
         evidence,
         signal: controller.signal,
       })
       const refreshed = await loadSprintDetail(sprintRunId, controller.signal)
       if (controller.signal.aborted) return
+      form.reset()
       setLoadState({ status: 'success', requestedId: sprintRunId, data: refreshed })
-      setEvidence('')
       setSubmissionSuccess(
         action === 'resubmit'
           ? 'ارسال مجدد ثبت شد و وضعیت تازه از سرور دریافت شد.'
-          : 'ارسال اسپرینت ثبت شد و وضعیت تازه از سرور دریافت شد.',
+          : action === 'update'
+            ? 'نسخه جدیدتر ثبت شد و سابقه تازه از سرور دریافت شد.'
+            : 'ارسال اسپرینت ثبت شد و وضعیت تازه از سرور دریافت شد.',
       )
     } catch (error) {
       if (controller.signal.aborted) return
-      setSubmissionError(submissionErrorMessage(error))
+      setSubmissionError(submissionErrorMessage(error, designWorkspaceRole))
       if (
         error instanceof ApiError &&
         [403, 404, 409].includes(error.status)
@@ -550,11 +767,10 @@ export function SprintDetailPage() {
   return (
     <SprintDetailContent
       data={loadState.data}
-      evidence={evidence}
       pending={submissionPending}
       submissionError={submissionError}
       submissionSuccess={submissionSuccess}
-      onEvidenceChange={setEvidence}
+      designWorkspaceRole={designWorkspaceRole}
       onSubmit={handleSubmit}
     />
   )

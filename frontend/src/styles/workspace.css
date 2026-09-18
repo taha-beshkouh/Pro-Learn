@@ -49,6 +49,68 @@
   font-weight: 800;
 }
 
+.workspace__design {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-4);
+  padding: var(--space-5);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+}
+
+.workspace__design header {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.workspace__design h2,
+.workspace__design p {
+  margin: 0;
+}
+
+.workspace__design-current {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-5);
+  max-width: 100%;
+}
+
+.workspace__design-current span {
+  overflow-wrap: anywhere;
+}
+
+.workspace__design-current a {
+  color: #c9deff;
+}
+
+.workspace__design-note {
+  color: var(--color-text-muted);
+  line-height: 1.7;
+}
+
+.workspace__design-form {
+  display: grid;
+  gap: var(--space-3);
+  width: min(100%, 38rem);
+}
+
+.workspace__design-form input {
+  width: 100%;
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.workspace__design-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
 .workspace__project-header {
   display: flex;
   align-items: flex-start;

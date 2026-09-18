@@ -13,10 +13,30 @@ import {
 } from '../../lib/api/staffRepository'
 import type { StaffProjectRunRepository } from '../../lib/api/types'
 
-function isHttpUrl(value: string) {
+function isCanonicalGithubRoot(value: string) {
   try {
     const url = new URL(value)
-    return url.protocol === 'http:' || url.protocol === 'https:'
+    const hostname = url.hostname.toLowerCase()
+    const path = url.pathname.endsWith('/')
+      ? url.pathname.slice(0, -1)
+      : url.pathname
+    const parts = path.split('/')
+    const owner = parts[1] ?? ''
+    const repository = (parts[2] ?? '').replace(/\.git$/i, '')
+    return (
+      (url.protocol === 'http:' || url.protocol === 'https:') &&
+      (hostname === 'github.com' || hostname === 'www.github.com') &&
+      !url.port &&
+      !url.username &&
+      !url.password &&
+      !url.search &&
+      !url.hash &&
+      parts.length === 3 &&
+      /^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$/.test(owner) &&
+      repository !== '.' &&
+      repository !== '..' &&
+      /^[A-Za-z0-9._-]+$/.test(repository)
+    )
   } catch {
     return false
   }
@@ -31,7 +51,9 @@ export function ProjectRunRepositorySection() {
   const [savingId, setSavingId] = useState<string | null>(null)
   const savingRef = useRef<string | null>(null)
   const [saveError, setSaveError] = useState<Record<string, string>>({})
-  const [savedId, setSavedId] = useState<string | null>(null)
+  const [success, setSuccess] = useState<{ id: string; message: string } | null>(null)
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [confirmingClearId, setConfirmingClearId] = useState<string | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
 
   useEffect(() => {
@@ -59,32 +81,29 @@ export function ProjectRunRepositorySection() {
     return () => controller.abort()
   }, [auth, reloadKey])
 
-  async function save(event: FormEvent<HTMLFormElement>, projectRunId: string) {
-    event.preventDefault()
+  async function persist(
+    projectRunId: string,
+    repositoryUrl: string | null,
+    successMessage: string,
+  ) {
     if (savingRef.current) return
-    const repositoryUrl = (drafts[projectRunId] ?? '').trim()
-    if (!isHttpUrl(repositoryUrl)) {
-      setSaveError((current) => ({
-        ...current,
-        [projectRunId]: 'یک نشانی کامل HTTP یا HTTPS وارد کنید.',
-      }))
-      return
-    }
 
     savingRef.current = projectRunId
     setSavingId(projectRunId)
-    setSavedId(null)
+    setSuccess(null)
     setSaveError((current) => ({ ...current, [projectRunId]: '' }))
     try {
-      const updated = await saveProjectRunRepository(projectRunId, repositoryUrl)
-      setRuns((current) =>
-        current.map((run) => (run.id === updated.id ? updated : run)),
+      await saveProjectRunRepository(projectRunId, repositoryUrl)
+      const refreshed = await loadStaffProjectRunRepositories()
+      setRuns(refreshed)
+      setDrafts(
+        Object.fromEntries(
+          refreshed.map((run) => [run.id, run.repository_url ?? '']),
+        ),
       )
-      setDrafts((current) => ({
-        ...current,
-        [updated.id]: updated.repository_url ?? '',
-      }))
-      setSavedId(updated.id)
+      setEditingId(null)
+      setConfirmingClearId(null)
+      setSuccess({ id: projectRunId, message: successMessage })
     } catch (error: unknown) {
       setSaveError((current) => ({
         ...current,
@@ -95,6 +114,32 @@ export function ProjectRunRepositorySection() {
       savingRef.current = null
       setSavingId(null)
     }
+  }
+
+  async function save(event: FormEvent<HTMLFormElement>, projectRunId: string) {
+    event.preventDefault()
+    const repositoryUrl = (drafts[projectRunId] ?? '').trim()
+    if (!isCanonicalGithubRoot(repositoryUrl)) {
+      setSaveError((current) => ({
+        ...current,
+        [projectRunId]: 'نشانی ریشه مخزن GitHub را وارد کنید.',
+      }))
+      return
+    }
+    await persist(
+      projectRunId,
+      repositoryUrl,
+      'نشانی canonical مخزن ProjectRun ذخیره شد.',
+    )
+  }
+
+  function cancelEdit(run: StaffProjectRunRepository) {
+    setDrafts((current) => ({
+      ...current,
+      [run.id]: run.repository_url ?? '',
+    }))
+    setEditingId(null)
+    setSaveError((current) => ({ ...current, [run.id]: '' }))
   }
 
   return (
@@ -129,8 +174,11 @@ export function ProjectRunRepositorySection() {
         />
       ) : (
         <div className="staff-repository__runs">
-          {runs.map((run) => (
-            <Card key={run.id} className="staff-repository__run">
+          {runs.map((run) => {
+            const isEditing = editingId === run.id
+            const isConfirmingClear = confirmingClearId === run.id
+            return (
+              <Card key={run.id} className="staff-repository__run">
               <header>
                 <div>
                   <h3 dir="auto">{run.project.name}</h3>
@@ -153,45 +201,130 @@ export function ProjectRunRepositorySection() {
                 ))}
               </ul>
 
-              <form onSubmit={(event) => void save(event, run.id)}>
-                <label htmlFor={`repository-${run.id}`}>
-                  نشانی canonical مخزن پروژه
-                </label>
-                <div>
-                  <input
-                    id={`repository-${run.id}`}
-                    type="url"
-                    dir="ltr"
-                    required
-                    placeholder="https://github.com/organization/repository"
-                    value={drafts[run.id] ?? ''}
-                    onChange={(event) => {
-                      setDrafts((current) => ({
-                        ...current,
-                        [run.id]: event.target.value,
-                      }))
-                      setSavedId(null)
-                      setSaveError((current) => ({ ...current, [run.id]: '' }))
-                    }}
-                    disabled={savingId !== null}
-                  />
-                  <Button type="submit" disabled={savingId !== null}>
-                    {savingId === run.id ? 'در حال ذخیره...' : 'ذخیره نشانی مخزن'}
-                  </Button>
-                </div>
+                {run.repository_url && !isEditing ? (
+                  <div className="staff-repository__current">
+                    <span>مخزن canonical فعلی</span>
+                    <a
+                      href={run.repository_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      dir="ltr"
+                    >
+                      {run.repository_url}
+                    </a>
+                    <div className="staff-repository__actions">
+                      <Button
+                        variant="secondary"
+                        disabled={savingId !== null}
+                        onClick={() => {
+                          setEditingId(run.id)
+                          setConfirmingClearId(null)
+                          setSuccess(null)
+                        }}
+                      >
+                        ویرایش نشانی
+                      </Button>
+                      <Button
+                        variant="danger"
+                        disabled={savingId !== null}
+                        onClick={() => {
+                          setConfirmingClearId(run.id)
+                          setEditingId(null)
+                          setSuccess(null)
+                        }}
+                      >
+                        حذف ارجاع مخزن
+                      </Button>
+                    </div>
+                    {isConfirmingClear ? (
+                      <div className="staff-repository__clear-confirmation" role="alert">
+                        <p>
+                          فقط ارجاع مخزن از PROLEARN حذف می‌شود. مخزن GitHub، دسترسی‌ها و اعضای آن حذف یا تغییر نمی‌کنند.
+                        </p>
+                        <div>
+                          <Button
+                            variant="danger"
+                            disabled={savingId !== null}
+                            onClick={() =>
+                              void persist(
+                                run.id,
+                                null,
+                                'ارجاع مخزن از PROLEARN حذف شد.',
+                              )
+                            }
+                          >
+                            {savingId === run.id
+                              ? 'در حال حذف ارجاع...'
+                              : 'تأیید حذف ارجاع'}
+                          </Button>
+                          <Button
+                            variant="secondary"
+                            disabled={savingId !== null}
+                            onClick={() => setConfirmingClearId(null)}
+                          >
+                            انصراف
+                          </Button>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : (
+                  <form onSubmit={(event) => void save(event, run.id)}>
+                    <label htmlFor={`repository-${run.id}`}>
+                      {run.repository_url
+                        ? 'نشانی جدید مخزن canonical'
+                        : 'نشانی canonical مخزن پروژه'}
+                    </label>
+                    <div>
+                      <input
+                        id={`repository-${run.id}`}
+                        type="url"
+                        dir="ltr"
+                        required
+                        placeholder="https://github.com/organization/repository"
+                        value={drafts[run.id] ?? ''}
+                        onChange={(event) => {
+                          setDrafts((current) => ({
+                            ...current,
+                            [run.id]: event.target.value,
+                          }))
+                          setSuccess(null)
+                          setSaveError((current) => ({ ...current, [run.id]: '' }))
+                        }}
+                        disabled={savingId !== null}
+                      />
+                      <Button type="submit" disabled={savingId !== null}>
+                        {savingId === run.id
+                          ? 'در حال ذخیره...'
+                          : run.repository_url
+                            ? 'ذخیره تغییرات'
+                            : 'افزودن مخزن'}
+                      </Button>
+                      {run.repository_url ? (
+                        <Button
+                          variant="secondary"
+                          disabled={savingId !== null}
+                          onClick={() => cancelEdit(run)}
+                        >
+                          انصراف
+                        </Button>
+                      ) : null}
+                    </div>
+                  </form>
+                )}
                 {saveError[run.id] ? (
                   <p className="staff-repository__error" role="alert">
                     {saveError[run.id]}
                   </p>
                 ) : null}
-                {savedId === run.id ? (
+                {success?.id === run.id ? (
                   <p className="staff-repository__success" role="status">
-                    نشانی مخزن ProjectRun ثبت شد.
+                    {success.message}
                   </p>
                 ) : null}
-              </form>
-            </Card>
-          ))}
+              </Card>
+            )
+          })}
         </div>
       )}
     </section>

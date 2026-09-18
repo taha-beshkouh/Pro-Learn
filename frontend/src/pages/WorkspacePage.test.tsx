@@ -157,6 +157,7 @@ function workspace(
     ],
     next_action: 'SUBMIT_SPRINT',
     repository_url: null,
+    design_workspace_url: null,
     sprints,
     resources,
     ...overrides,
@@ -235,6 +236,46 @@ function installApi({
   return fetchMock
 }
 
+function installDesignApi({
+  initial,
+  updated,
+  patchStatus = 200,
+}: {
+  initial: ProjectRunWorkspaceResponse
+  updated?: ProjectRunWorkspaceResponse
+  patchStatus?: number
+}) {
+  let current = initial
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, request?: RequestInit) => {
+    const url = new URL(String(input), 'http://frontend.test')
+    const method = request?.method ?? 'GET'
+    if (method === 'GET' && url.pathname === '/api/v1/project-runs/me/workspace/') {
+      return jsonResponse(current)
+    }
+    if (method === 'GET' && url.pathname === '/api/v1/auth/csrf/') {
+      return jsonResponse({ csrfToken: 'csrf-from-api' })
+    }
+    if (
+      method === 'PATCH' &&
+      url.pathname === '/api/v1/project-runs/project-run-workspace-api/design-workspace/'
+    ) {
+      if (patchStatus !== 200) {
+        return jsonResponse({ design_workspace_url: ['Enter a valid URL.'] }, patchStatus)
+      }
+      current = updated ?? current
+      return jsonResponse({ id: current.id, design_workspace_url: current.design_workspace_url })
+    }
+    throw new Error(`Unexpected request: ${method} ${url.pathname}`)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
+function designerWorkspace(overrides: Partial<ProjectRunWorkspaceResponse> = {}) {
+  const base = workspace()
+  return workspace({ membership: base.team[2], ...overrides })
+}
+
 function authValue(refreshSession = vi.fn(async () => undefined)): AuthContextValue {
   return {
     status: 'authenticated',
@@ -270,6 +311,132 @@ afterEach(() => {
 })
 
 describe('WorkspacePage', () => {
+  it('offers the current Product Designer an Add action when the design workspace is missing', async () => {
+    installApi({ workspaceData: designerWorkspace() })
+    renderPage()
+
+    expect(await screen.findByText(/لینک آن را اضافه کنید تا تیم/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'افزودن فضای طراحی' })).toBeInTheDocument()
+  })
+
+  it('shows the configured design workspace and Change action to the current Product Designer', async () => {
+    installApi({
+      workspaceData: designerWorkspace({ design_workspace_url: 'https://design.example.test/a' }),
+    })
+    renderPage()
+
+    expect(await screen.findByText('https://design.example.test/a')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'باز کردن فضای طراحی' })).toHaveAttribute(
+      'href', 'https://design.example.test/a',
+    )
+    expect(screen.getByRole('button', { name: 'تغییر لینک' })).toBeInTheDocument()
+  })
+
+  it.each(['BACKEND_DEVELOPER', 'FRONTEND_DEVELOPER'])(
+    'keeps missing design workspace read-only for %s with role-aware guidance',
+    async (roleCode) => {
+      const current = workspace()
+      const memberForRole = current.team.find((entry) => entry.role.code === roleCode)!
+      installApi({ workspaceData: workspace({ membership: memberForRole }) })
+      renderPage()
+
+      expect(await screen.findByText(/طراح محصول هنوز فضای طراحی پروژه را تنظیم نکرده است/)).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'افزودن فضای طراحی' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'تغییر لینک' })).not.toBeInTheDocument()
+    },
+  )
+
+  it.each(['BACKEND_DEVELOPER', 'FRONTEND_DEVELOPER'])(
+    'shows a configured workspace to %s without mutation controls',
+    async (roleCode) => {
+      const current = workspace()
+      const memberForRole = current.team.find((entry) => entry.role.code === roleCode)!
+      installApi({
+        workspaceData: workspace({
+          membership: memberForRole,
+          design_workspace_url: 'https://design.example.test/shared',
+        }),
+      })
+      renderPage()
+
+      expect(await screen.findByText('https://design.example.test/shared')).toBeInTheDocument()
+      expect(screen.getByRole('link', { name: 'باز کردن فضای طراحی' })).toHaveAttribute(
+        'href', 'https://design.example.test/shared',
+      )
+      expect(screen.queryByRole('button', { name: 'تغییر لینک' })).not.toBeInTheDocument()
+    },
+  )
+
+  it('adds a trimmed design URL via the exact PATCH action and re-fetches Workspace', async () => {
+    const fetchMock = installDesignApi({
+      initial: designerWorkspace(),
+      updated: designerWorkspace({ design_workspace_url: 'https://design.example.test/new' }),
+    })
+    renderPage()
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: 'افزودن فضای طراحی' }))
+    await user.type(screen.getByRole('textbox', { name: 'آدرس فضای طراحی' }), '  https://design.example.test/new  ')
+    await user.click(screen.getByRole('button', { name: 'ذخیره' }))
+
+    await screen.findByText('https://design.example.test/new')
+    const patches = callsFor(fetchMock, '/api/v1/project-runs/project-run-workspace-api/design-workspace/')
+    expect(patches).toHaveLength(1)
+    expect(patches[0][1]?.method).toBe('PATCH')
+    expect(JSON.parse(String(patches[0][1]?.body))).toEqual({
+      design_workspace_url: 'https://design.example.test/new',
+    })
+    expect(callsFor(fetchMock, '/api/v1/project-runs/me/workspace/')).toHaveLength(2)
+  })
+
+  it('changes the current URL but displays only the authoritative refetched value', async () => {
+    const fetchMock = installDesignApi({
+      initial: designerWorkspace({ design_workspace_url: 'https://design.example.test/a' }),
+      updated: designerWorkspace({ design_workspace_url: 'https://design.example.test/b' }),
+    })
+    renderPage()
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: 'تغییر لینک' }))
+    expect(screen.getByText(/مدارک ثبت‌شدهٔ قبلی تغییر نمی‌کنند/)).toBeInTheDocument()
+    await user.clear(screen.getByRole('textbox', { name: 'آدرس فضای طراحی' }))
+    await user.type(screen.getByRole('textbox', { name: 'آدرس فضای طراحی' }), 'https://design.example.test/b')
+    await user.click(screen.getByRole('button', { name: 'ذخیره' }))
+
+    await screen.findByText('https://design.example.test/b')
+    expect(callsFor(fetchMock, '/api/v1/project-runs/me/workspace/')).toHaveLength(2)
+    expect(callsFor(fetchMock, '/api/v1/project-runs/project-run-workspace-api/design-workspace/')).toHaveLength(1)
+  })
+
+  it('rejects empty and non-HTTP URLs before PATCH and keeps backend errors visible safely', async () => {
+    const fetchMock = installDesignApi({ initial: designerWorkspace(), patchStatus: 400 })
+    renderPage()
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: 'افزودن فضای طراحی' }))
+    await user.click(screen.getByRole('button', { name: 'ذخیره' }))
+    expect(screen.getByText(/یک آدرس کامل و معتبر HTTP یا HTTPS/)).toBeInTheDocument()
+    await user.type(screen.getByRole('textbox', { name: 'آدرس فضای طراحی' }), 'ftp://example.test/a')
+    await user.click(screen.getByRole('button', { name: 'ذخیره' }))
+    expect(callsFor(fetchMock, '/api/v1/project-runs/project-run-workspace-api/design-workspace/')).toHaveLength(0)
+    await user.clear(screen.getByRole('textbox', { name: 'آدرس فضای طراحی' }))
+    await user.type(screen.getByRole('textbox', { name: 'آدرس فضای طراحی' }), 'https://design.example.test/a')
+    await user.click(screen.getByRole('button', { name: 'ذخیره' }))
+    expect(await screen.findByText(/آدرس فضای طراحی معتبر نیست/)).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'آدرس فضای طراحی' })).toHaveValue('https://design.example.test/a')
+  })
+
+  it('keeps a terminal ProjectRun design URL visible but read-only even for its designer', async () => {
+    installApi({
+      workspaceData: designerWorkspace({
+        state: 'COMPLETED',
+        ended_at: '2026-10-21T07:30:00Z',
+        design_workspace_url: 'https://design.example.test/archive',
+      }),
+    })
+    renderPage()
+
+    expect(await screen.findByText('https://design.example.test/archive')).toBeInTheDocument()
+    expect(screen.getByText(/فقط برای مشاهده است/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'تغییر لینک' })).not.toBeInTheDocument()
+  })
   it('renders exact runtime identity, Sprint state, Team snapshots, and every API-visible work item', async () => {
     const fetchMock = installApi()
     const { container } = renderPage()

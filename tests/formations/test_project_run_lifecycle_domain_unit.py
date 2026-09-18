@@ -1,8 +1,11 @@
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
 from apps.formations.exceptions import SprintRuntimeConfigurationError
+from apps.formations.api.serializers import StaffProjectRunRepositorySerializer
 from apps.formations.models import ProjectRun, ProjectRunState
 from apps.formations.services import (
     project_run_deadline,
@@ -42,6 +45,31 @@ def test_submission_cutoff_is_inclusive_at_deadline():
         now=deadline_at,
         deadline_at=deadline_at,
     ) is True
+
+
+def test_staff_incomplete_read_flag_uses_server_time_and_terminal_state():
+    deadline = datetime(2026, 2, 1, tzinfo=timezone.utc)
+    run = SimpleNamespace(
+        state=ProjectRunState.ACTIVE,
+        ended_at=None,
+        deadline_at=deadline,
+    )
+    serializer = StaffProjectRunRepositorySerializer()
+
+    with patch(
+        "apps.formations.api.serializers.timezone.now",
+        return_value=deadline - timedelta(microseconds=1),
+    ):
+        assert serializer.get_can_mark_incomplete(run) is False
+    with patch(
+        "apps.formations.api.serializers.timezone.now",
+        return_value=deadline,
+    ):
+        assert serializer.get_can_mark_incomplete(run) is True
+        run.state = ProjectRunState.COMPLETED
+        assert serializer.get_can_mark_incomplete(run) is False
+        run.state = ProjectRunState.INCOMPLETE
+        assert serializer.get_can_mark_incomplete(run) is False
 
 
 def test_project_run_has_no_extension_or_runtime_task_lifecycle_fields():

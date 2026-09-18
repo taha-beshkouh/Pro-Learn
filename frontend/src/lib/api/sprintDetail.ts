@@ -91,8 +91,17 @@ function isSubmission(value: unknown): value is SprintSubmissionResponse {
     isRecord(value) &&
     hasString(value, 'id') &&
     isTeamMember(value.submitted_by) &&
+    isNullableString(value.final_commit_url) &&
+    isNullableString(value.deployment_url) &&
+    isNullableString(value.design_url_snapshot) &&
     hasString(value, 'evidence') &&
-    hasString(value, 'submitted_at')
+    hasString(value, 'submitted_at') &&
+    (value.review_decision === null ||
+      (isRecord(value.review_decision) &&
+        (value.review_decision.decision === 'CHANGES_REQUESTED' ||
+          value.review_decision.decision === 'COMPLETED') &&
+        hasString(value.review_decision, 'feedback') &&
+        hasString(value.review_decision, 'reviewed_at')))
   )
 }
 
@@ -113,6 +122,7 @@ function assertSprintDetailContract(
     !isNullableString(value.opened_at) ||
     !isNullableString(value.completed_at) ||
     !isNullableString(value.repository_url) ||
+    !isNullableString(value.design_workspace_url) ||
     !Array.isArray(value.work_items) ||
     !value.work_items.every(isWorkItem) ||
     !Array.isArray(value.submissions) ||
@@ -177,17 +187,25 @@ async function loadCurrentProjectRunId(signal?: AbortSignal) {
 
 export async function submitSprintEvidence({
   sprintRunId,
+  finalCommitUrl,
+  deploymentUrl,
   evidence,
   signal,
 }: {
   sprintRunId: string
+  finalCommitUrl: string
+  deploymentUrl: string
   evidence: string
   signal?: AbortSignal
 }) {
   const projectRunId = await loadCurrentProjectRunId(signal)
   await apiClient.post<unknown>(
     API_ENDPOINTS.projectRuns.submitSprint(projectRunId, sprintRunId),
-    { evidence },
+    {
+      final_commit_url: finalCommitUrl,
+      deployment_url: deploymentUrl,
+      evidence,
+    },
     { signal },
   )
 }

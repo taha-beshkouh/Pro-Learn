@@ -6,6 +6,91 @@
 
 ## Current Workstream
 
+### Deployment Phase 2 — Production Process and Combined Django/React Serving
+Status: `IMPLEMENTED - LOCAL STATIC/FRONTEND VALIDATION PASSED - LINUX/PROVIDER VALIDATION PENDING`
+
+Current position:
+- Gunicorn is the production WSGI server for the synchronous Django application; the provider-independent Linux start command is `gunicorn config.wsgi:application` (bind address, port, and worker count remain deployment settings).
+- Vite builds the React frontend to ignored `frontend/dist`. Django serves that generated `index.html` for the root and frontend routes; WhiteNoise serves its hashed `/assets/*` files and current root public files (`favicon.svg`, `icons.svg`) from the same build directory.
+- `STATIC_ROOT` is `staticfiles`; `collectstatic` prepares Django/Admin files for WhiteNoise at `/static/*`. The SPA fallback excludes `/api/*`, `/admin/*`, `/static/*`, `/assets/*`, and the root public filenames, so missing backend/static resources do not return SPA HTML.
+- Same-origin `/api/v1`, session cookies, CSRF, and frontend credentials behavior remain unchanged. The Vite development server and its API proxy remain available without a production build for normal frontend development.
+- Provider-independent build sequence: `uv sync --locked`, `npm ci` in `frontend/`, `npm run build` in `frontend/`, then `python manage.py collectstatic --noinput`; start Gunicorn after build artifacts are present. Database migrations are not part of this application build.
+- No production hostname, proxy/HTTPS security values, provider configuration, or PostgreSQL setup was added. Gunicorn process execution on Linux and PostgreSQL-backed regression tests remain manual deployment/developer validation boundaries.
+
+Validation state:
+- `uv lock` reconciled the new Gunicorn/WhiteNoise dependencies; the developer reported successful `uv sync --locked --extra test` and lock resolution.
+- `npm ci`, all 203 frontend tests, typecheck, lint, and Vite production build pass. Focused production serving/static tests pass (18), including current built-asset references; 572 backend tests collect and a 41-test database-free subset passes.
+- `manage.py check` and `makemigrations --check --dry-run` pass using `config.settings_static`; WSGI application import passes. No real PostgreSQL connection, migration, or schema change was made.
+
+---
+
+### Deployment Phase 1 — Release Baseline Preparation
+Status: `COMMITTED BY DEVELOPER - SAFE VALIDATION PASSED - MANUAL POSTGRESQL VALIDATION PENDING`
+
+Current position:
+- the uncommitted FAQ expand/collapse regression identified during release inspection was fixed before this baseline preparation; its focused regression tests pass,
+- `pyproject.toml` and `uv.lock` are the canonical Python dependency source; `uv.lock` was reconciled with the existing `python-dotenv==1.2.2` declaration through `uv lock --offline`, and `uv lock --check --offline` passes,
+- `frontend/package-lock.json` remains the canonical Node lock; `npm ci` restores the dependency tree without changing the manifest or lock,
+- untracked formations migrations `0011`–`0014` are intended release source in a sequential chain; tracked historical migrations were not modified and the static-settings model-drift check reports no changes,
+- the developer committed the intended Phase-1 release baseline before Phase 2 began,
+- no Runflare, Cloud VPS, Docker, production-server, static-serving, or provider-specific deployment configuration was implemented in Phase 1.
+
+Validation state:
+- frontend: `npm ci`, 203 tests, typecheck, lint, and Vite production build pass; output is `frontend/dist`, which remains ignored,
+- backend without PostgreSQL: Django system check and `makemigrations --check --dry-run` pass with `config.settings_static`; 45 selected pure tests pass and 554 tests collect,
+- PostgreSQL-backed migration execution and tests remain developer-controlled; Codex did not connect to or change the real PostgreSQL database.
+
+---
+
+### Participant Sprint Submission Form Stale-Value Fix
+Status: `IMPLEMENTED - FRONTEND VALIDATED`
+
+Current position:
+- a browser-restored/autofilled DOM value could differ from the old `finalCommitUrl` React state because the submit handler read that state, not the visible form control; the same duplicate-state path affected deployment URL and optional evidence,
+- Sprint Detail now takes one synchronous `FormData` snapshot from the visible form at submit time for `final_commit_url`, `deployment_url`, and `evidence` in `ACTIVE` Submit, `SUBMITTED` Update Submission, and `CHANGES_REQUESTED` Resubmit,
+- empty and invalid current values are validated from that snapshot; failed submissions keep visible edits, authoritative revalidation does not restore an older value, and a successful submit still refetches Sprint Detail before resetting the form,
+- `latest_submission` remains historical display data, not a second form-value source; backend request contract, repository matching, submission authorization, state/deadline rules, and append-only history are unchanged; no schema or migration change was made.
+
+Validation state:
+- focused Sprint Detail frontend tests pass (36 tests), including visible-value/payload agreement across all three actions, cleared input, backend-error retry, deployment/note edits, and unsaved-edit preservation across revalidation,
+- the full frontend suite passes (201 tests), and frontend typecheck, lint, and production build pass; Django system check passes using the repository virtual environment,
+- a separate full-suite run had a `RoleSelectionFlow` guest-catalog wait failure; that test passed in isolation and the subsequent full-suite rerun passed without an unrelated code change.
+
+---
+
+### Staff ProjectRun Mark-INCOMPLETE UI
+Status: `IMPLEMENTED - FRONTEND VALIDATED - MANUAL POSTGRESQL VALIDATION PENDING`
+
+Current position:
+- the existing locked `mark_project_run_incomplete()` service and Staff-only `POST /api/v1/project-runs/{project_run_id}/incomplete/` action remain the sole terminalization path for an overdue `ACTIVE` ProjectRun,
+- the existing Staff active-ProjectRun list now exposes `deadline_at` and read-only, server-derived `can_mark_incomplete`; the service rechecks eligibility under its transaction lock,
+- the existing `/staff/formations` area offers a basic confirmation before marking an eligible run incomplete, sends an empty request body, and refetches the authoritative Staff run list after success or rejection,
+- an INCOMPLETE run leaves the active list while its Sprint/submission/review history remains available through the existing Staff Sprint read area; Django Admin remains a fallback, not the required normal operational path,
+- no automatic deadline terminalization, SprintRun state addition, model/schema/migration change, or Workspace feedback change was introduced.
+
+Validation state:
+- focused Staff frontend tests pass (28 tests), the full frontend suite passes (194 tests), and frontend typecheck, lint, and production build pass,
+- Django system check and pure ProjectRun lifecycle tests pass (7 tests); PostgreSQL-backed action, security, historical-read, and concurrency tests are written but remain developer-controlled and pending.
+
+---
+
+### ReadyCheck Decline / Expiry Replacement UI
+Status: `IMPLEMENTED - FRONTEND VALIDATED - MANUAL POSTGRESQL VALIDATION PENDING`
+
+Current position:
+- participant ReadyCheck keeps the authenticated user's existing Confirm/Decline actions and now explains that Decline exits the current pre-ProjectRun Formation slot; it refetches server state after the response,
+- a declined or server-expired ReadyCheck remains the current Formation role slot until Staff replacement, but no longer blocks that user's new readiness or eligible role change; confirmed and unexpired pending slots still block participation elsewhere,
+- the participant ReadyCheck selector prioritizes an active invitation over an older declined/expired current slot while retaining the previous terminal-status display when no newer invitation exists,
+- the existing Staff replacement API/service still validates exact Formation, role, ProjectVersion, stack, candidate readiness, and active lifecycle before atomically preserving the old ReadyCheck as historical and creating a new pending current slot,
+- the existing `/staff/formations` page now displays current ReadyCheck statuses and offers replacement for declined or effectively expired slots using only server-returned readiness candidates and an authoritative Formation refetch,
+- Team + ProjectRun startup remains conditional on all three current slots confirming; no Trust/penalty, post-start departure, new schema, or migration was introduced.
+
+Validation state:
+- focused ReadyCheck/Staff frontend tests pass (33 tests); the full frontend suite passes (190 tests), as do typecheck, lint, and production build,
+- Django system check, Python compilation, and focused backend test collection pass (89 collected); PostgreSQL-backed lifecycle, replacement, and concurrency execution remains developer-controlled and pending.
+
+---
+
 ### New ProjectRun Sprint 1 Startup
 Status: `IMPLEMENTATION COMPLETE - MANUAL POSTGRESQL VALIDATION PENDING`
 
@@ -31,12 +116,16 @@ Current position:
 - Backend and Frontend Developer confirmation requires an existing or supplied valid GitHub username; Product Designer confirmation remains valid without one,
 - a supplied username is persisted in the same transaction as Ready Check confirmation, while decline and server-authoritative expiry behavior remain independent of GitHub identity,
 - `ProjectRun.repository_url` is a nullable canonical repository reference so ProjectRun creation remains independent of manual GitHub setup,
-- Staff/Admin can list active ProjectRuns with authoritative Team member role/email/GitHub data and register/update the canonical HTTP(S) repository URL,
+- Staff/Admin can list active ProjectRuns with authoritative Team member role/email/GitHub data and register, replace, or explicitly clear the canonical GitHub repository root URL,
+- accepted repository aliases are normalized to `https://github.com/<owner>/<repository>` before persistence; non-root GitHub URLs and non-GitHub hosts are rejected,
+- application validation plus the pending conditional database uniqueness constraint prevent one canonical repository from being assigned to different ProjectRuns while allowing multiple ProjectRuns with no repository,
+- clearing removes only the PROLEARN reference and performs no GitHub repository, collaborator, invitation, or access operation,
 - participant Workspace exposes the persisted repository link or a non-error pending-setup state,
 - repository creation, invitations, access changes, account verification, OAuth, and all GitHub API operations remain outside PROLEARN.
 
 Validation state:
-- model/API/service/frontend implementation and migration source files are complete,
+- model/API/service/frontend implementation and migration source files are complete, including Staff add/edit/clear handling and controlled database-race errors,
+- known existing duplicate repository assignments must be corrected manually before applying the new repository-uniqueness migration; no existing data is automatically rewritten or removed,
 - Django system checks, migration drift inspection, pure GitHub validator tests, full frontend tests, typecheck, lint, and production build pass,
 - no migration has been applied to the developer's PostgreSQL database,
 - PostgreSQL-backed Ready Check, repository permission, lifecycle, and full-suite validation remain developer-controlled and pending.
@@ -49,14 +138,136 @@ Status: `IMPLEMENTATION COMPLETE - MANUAL POSTGRESQL VALIDATION PENDING`
 Current position:
 - `SprintRun.designated_submitter` remains nullable for legacy/historical compatibility; existing non-null values are preserved, but the field has no current business authority and the current Sprint-opening flow does not write it,
 - any authenticated, active, current TeamMember of the exact ProjectRun may submit or resubmit when the existing ProjectRun, Sprint-state, deadline, and transition rules allow it,
+- before Staff starts review, a `SUBMITTED` Sprint accepts a newer append-only `SprintSubmission`; the Sprint remains `SUBMITTED`, the new row becomes the deterministic latest review candidate, and all earlier rows remain unchanged,
+- once Staff transitions the Sprint to `UNDER_REVIEW`, participant submission is blocked until the existing `CHANGES_REQUESTED` resubmission path becomes available,
 - `SprintSubmission.submitted_by` remains the authoritative append-only record of the actual actor for every submission and resubmission,
 - Sprint state/timestamp integrity, exact-ProjectRun current-membership enforcement, deadline enforcement, review transitions, terminal ProjectRun behavior, and transaction/row-locking guarantees remain in place,
 - dashboard `SUBMIT_SPRINT` and `RESUBMIT_SPRINT` guidance no longer branches by designation; `COLLABORATE` and `ADDRESS_CHANGES` are retained only as designation-free frontend decode aliases.
 
 Validation state:
-- migration source, regression coverage, service/API behavior, admin behavior, and frontend compatibility changes are implemented,
+- the trigger-only migration source, service/API replacement behavior, append-only/history regressions, update-versus-review concurrency coverage, and Sprint Detail `Update submission` flow are implemented,
+- Django system checks, Python compilation, PostgreSQL test collection, full frontend tests, typecheck, lint, and production build pass,
 - no migration has been applied to the developer's real PostgreSQL database,
 - PostgreSQL-specific and final full-suite validation remain developer-controlled and pending.
+
+---
+
+### Structured Sprint Submission Evidence Foundation
+Status: `IMPLEMENTATION COMPLETE - MANUAL POSTGRESQL VALIDATION PENDING`
+
+Current position:
+- `ProjectRun.design_workspace_url` is a nullable current canonical design-workspace reference; the exact current Product Designer may set/update it and Staff/Admin may correct it while the ProjectRun is active,
+- Backend/Frontend Developers, non-members, and members of another ProjectRun cannot mutate that ProjectRun's canonical design workspace,
+- every new participant `SprintSubmission` requires an exact GitHub commit URL from that ProjectRun's canonical repository and a valid deployment URL,
+- `design_url_snapshot` is derived server-side from the locked ProjectRun's current design workspace; the client cannot select it, and later workspace changes do not rewrite earlier snapshots,
+- existing `evidence` remains an optional participant note, while `submitted_by` and `submitted_at` remain server-authoritative,
+- historical SprintSubmission rows remain nullable for the new structured fields and are not backfilled or rewritten,
+- the INSERT trigger keeps the existing state/current-membership/timing/terminal protections and additionally rejects new rows with missing structured evidence or a design snapshot different from the current ProjectRun workspace,
+- append-only history, pre-review replacement, deadline enforcement, exact-run authorization, and designated-submitter-free submission behavior remain unchanged.
+
+Validation state:
+- migration source, service/API contracts, participant Sprint Detail integration, and focused PostgreSQL regression coverage are implemented,
+- Django system checks and migration-source drift checks pass; pure URL/serializer tests and the full frontend suite pass, as do frontend typecheck, lint, and production build,
+- no migration or PostgreSQL-dependent test has been executed by Codex; developer-controlled migration and PostgreSQL validation remain required.
+
+---
+
+### Participant Design Workspace Management
+Status: `ACTIVE-RUN FRONTEND COMPLETE - TERMINAL READ API GAP - BACKEND POSTGRESQL VALIDATION PENDING`
+
+Current position:
+- participant Workspace reads the current `ProjectRun.design_workspace_url`, exact TeamMember role snapshot, and ProjectRun state from the existing Workspace API,
+- while the run is `ACTIVE`, the current Product Designer can add or replace the design URL through the existing `PATCH /api/v1/project-runs/{project_run_id}/design-workspace/` action; Workspace refetches authoritative data after saving,
+- Backend/Frontend Developers see the current link read-only or a role-aware waiting message when it is missing; mutation controls are gated on `ACTIVE`,
+- the current participant Workspace selector returns only active ProjectRuns, so historical terminal-run Workspace viewing is not available through this API (no backend read-path change was made in this frontend slice),
+- the existing Staff/Admin correction path and backend role/run authorization are unchanged; historical `SprintSubmission.design_url_snapshot` values are not rewritten,
+- Sprint Detail now directs users to Workspace when the design prerequisite is missing and distinguishes the Product Designer from other members using exact-run Workspace membership context,
+- no Figma integration, design-history model, schema change, migration, or new participant submission contract was introduced.
+
+Validation state:
+- focused Workspace and Sprint Detail frontend tests pass (41 tests); the full frontend suite passes (177 tests), as do lint, typecheck through production build, and the production build,
+- existing PostgreSQL-backed design-workspace permission, cross-run, terminal-state, and historical-snapshot tests were not run by Codex and remain developer-controlled.
+
+---
+
+### Participant Sprint Structured Submission UI
+Status: `FRONTEND IMPLEMENTATION COMPLETE - BACKEND POSTGRESQL VALIDATION PENDING`
+
+Current position:
+- the existing participant Sprint Detail route uses the current SprintRun detail and submit APIs for `ACTIVE` Submit, `SUBMITTED` Update Submission, and `CHANGES_REQUESTED` Resubmit; `LOCKED`, `UNDER_REVIEW`, and `COMPLETED` remain read-only,
+- each successful action refetches authoritative Sprint state, `latest_submission`, and oldest-to-newest append-only submission history; frontend does not edit earlier submissions or synthesize state,
+- the form sends only required `final_commit_url`, required `deployment_url`, and optional `evidence`; submitter, time, and design snapshot remain server-derived,
+- current canonical repository and design workspace links are displayed separately from per-submission final commit, deployment, and historical design snapshots,
+- submission is disabled when the Staff-managed repository or Product-Designer-managed design workspace is missing, with role-aware design guidance and basic local HTTP(S) input validation; backend repository matching, membership, state, deadline, and concurrency remain authoritative,
+- participant Sprint Detail now exposes a participant-safe nullable `review_decision` on each submission (and `latest_submission`), with only decision, feedback, and reviewed_at; the page shows historical decisions on their exact submissions and current feedback beside Resubmit only while the Sprint is `CHANGES_REQUESTED`,
+- after a new submission returns the Sprint to `SUBMITTED`, old feedback remains in history but is no longer shown as a current warning; Staff reviewer identity is not exposed through this participant contract.
+- participant Sprint Detail still uses the existing active-ProjectRun selector, so terminal-run participant historical access remains a separate read-path limitation; a Workspace actionable-feedback summary remains deferred.
+
+Validation state:
+- focused Sprint Detail frontend tests pass (29 tests), full frontend tests pass (187 tests), and frontend lint, typecheck, and production build pass,
+- Django system check and non-database review serializer/input tests pass (16 tests); participant, ReviewDecision, structured-submission, and Staff-read PostgreSQL tests collect (47 tests) but execution remains developer-controlled,
+- this feedback phase changed only the participant read serializer/query prefetch, frontend types/presentation/tests, and this status note; no model, schema, migration, review mutation, or real database data changed.
+
+---
+
+### Persisted Sprint ReviewDecision History
+Status: `IMPLEMENTATION COMPLETE - MANUAL POSTGRESQL VALIDATION PENDING`
+
+Current position:
+- `ReviewDecision` is an append-only, one-to-one final decision for the exact latest `SprintSubmission` being reviewed,
+- `SUBMITTED -> UNDER_REVIEW` remains a decision-free review-start transition,
+- `UNDER_REVIEW -> CHANGES_REQUESTED` now requires trimmed non-empty Staff feedback and atomically records the authenticated active Staff actor, server-authoritative review time, decision, and reviewed submission,
+- `UNDER_REVIEW -> COMPLETED` atomically records the same review history with optional feedback and preserves existing final-Sprint ProjectRun completion behavior,
+- participant submissions remain blocked during `UNDER_REVIEW`, so the deterministic latest submission ordered by `submitted_at, id` is the authoritative review candidate without a mutable review pointer,
+- the database enforces one decision per submission, active Staff reviewers, latest-submission binding, valid decision/feedback data, append-only history, and prevents a final Sprint transition without its matching latest-submission decision,
+- review action serializers reject client-controlled reviewer, timestamp, submission identity, and arbitrary decision values,
+- Staff Review UI and participant Sprint Detail feedback presentation are now available in their separate frontend/read-contract phases; review action and persistence semantics remain unchanged.
+
+Validation state:
+- model, service, strict review inputs, migration source, API behavior, and focused service/API/database/concurrency regressions are implemented,
+- Django system checks, Python compilation, full pytest collection, and pure serializer/domain tests pass,
+- no migration has been applied to the developer's PostgreSQL database,
+- PostgreSQL-backed review integrity, concurrency, lifecycle, and full-suite execution remain developer-controlled and pending.
+
+---
+
+### Staff Sprint Read / Discovery API
+Status: `IMPLEMENTATION COMPLETE - MANUAL POSTGRESQL VALIDATION PENDING`
+
+Current position:
+- authenticated active Staff/Admin may list the ordered SprintRuns for any exact ProjectRun through `GET /api/v1/project-runs/{project_run_id}/sprints/`, including terminal ProjectRuns retained for audit history,
+- authenticated active Staff/Admin may inspect one exact-run-scoped SprintRun through `GET /api/v1/project-runs/{project_run_id}/sprints/{sprint_run_id}/`,
+- the detail response exposes append-only SprintSubmission history oldest-to-newest with structured commit, deployment, design snapshot, evidence, actual submitter, and server submission time,
+- each submission exposes its nullable one-to-one ReviewDecision with decision, participant-readable feedback, actual Staff reviewer, and server review time,
+- `latest_submission` is resolved server-side as the final item under the authoritative `submitted_at, id` ordering; no mutable current-submission pointer or persisted derived review flag was added,
+- exact ProjectRun/SprintRun filtering returns a non-revealing not-found response for cross-run mismatches, and participants, anonymous users, and inactive Staff cannot use these endpoints,
+- Staff read querysets select related submitter/reviewer identity and prefetch ordered history, while participant Workspace/Sprint Detail selectors and all review mutations remain unchanged,
+- this phase adds no model, schema, migration, state transition, or mutation behavior and does not include a Staff Review UI.
+
+Validation state:
+- focused Staff list/detail, history, latest-submission, permission, cross-run, terminal-read, no-mutation, and bounded-query test source is implemented (three list queries and two detail queries regardless of nested history size),
+- Django system checks, Python compilation, route/serializer inspection, and pytest collection pass,
+- PostgreSQL-backed endpoint and regression-suite execution remain developer-controlled and pending.
+
+---
+
+### Staff Sprint Review UI
+Status: `IMPLEMENTATION COMPLETE - FRONTEND VALIDATED`
+
+Current position:
+- the existing `/staff/formations` area now contains a deliberately basic functional Sprint Review section rather than a separate Staff dashboard,
+- Staff selects an active or preserved historical ProjectRun, navigates the server-ordered SprintRun list, and reads the Staff Sprint detail contract with explicit `latest_submission` plus oldest-to-newest submission/ReviewDecision history,
+- structured final commit, deployment, design-workspace snapshot, optional evidence note, actual submitter/time, final decision, feedback, and actual reviewer/time are displayed from API data,
+- `SUBMITTED` exposes the existing start-review action; `UNDER_REVIEW` exposes request-changes with required meaningful feedback and complete with optional feedback; eligible `LOCKED` Sprints can be sent to the existing Staff open action,
+- every successful or rejected mutation re-fetches authoritative Sprint list/detail state; no optimistic lifecycle state, reviewer assignment, designated-submitter behavior, or client-authored ReviewDecision is used,
+- terminal ProjectRuns discovered through preserved Formation records remain history-only, while the active ProjectRun list remains the authority for whether mutation controls may be offered,
+- completing a Sprint does not auto-open the next Sprint; Staff opens a later eligible Sprint explicitly through the existing endpoint,
+- participant Sprint Detail review-feedback presentation is now available; a Workspace actionable-feedback card, global review inbox, notifications, and final visual redesign remain deferred,
+- no backend API, model, schema, migration, or database state changed in this frontend phase.
+
+Validation state:
+- focused Staff Sprint Review tests cover discovery, ordered state display, explicit latest submission, structured evidence/history, all review actions and payloads, open-Sprint behavior, terminal read-only behavior, empty history, authorization failure, and stale-action revalidation,
+- focused Staff tests pass (`23 passed`), the complete frontend suite passes (`165 passed`), and frontend typecheck, lint, and production build pass.
 
 ---
 

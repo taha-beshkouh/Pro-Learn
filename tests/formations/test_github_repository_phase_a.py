@@ -1,6 +1,9 @@
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from unittest.mock import patch
 
 import pytest
+from django.db import IntegrityError, close_old_connections, transaction
 
 from apps.formations.exceptions import FormationCompletionConflict, ReadyCheckExpired
 from apps.formations.models import ProjectReadiness, ProjectRun, ReadyCheckStatus
@@ -296,6 +299,61 @@ def test_staff_lists_members_and_updates_project_run_repository(
     assert runtime_project_run.repository_url == "https://github.com/prolearn/helpdesk-run"
 
 
+def test_staff_can_set_edit_keep_and_clear_repository_without_changing_run_identity(
+    api_client,
+    facilitator,
+    runtime_project_run,
+):
+    url = f"/api/v1/project-runs/{runtime_project_run.id}/repository/"
+    unchanged = (
+        runtime_project_run.team_id,
+        runtime_project_run.project_version_id,
+        runtime_project_run.state,
+        runtime_project_run.started_at,
+        runtime_project_run.deadline_at,
+        runtime_project_run.ended_at,
+    )
+    api_client.force_login(facilitator)
+
+    created = api_client.patch(
+        url,
+        {"repository_url": "HTTPS://WWW.GITHUB.COM/ProLearn/Initial.git/"},
+        format="json",
+    )
+    kept = api_client.patch(
+        url,
+        {"repository_url": "http://github.com/PROLEARN/INITIAL"},
+        format="json",
+    )
+    edited = api_client.patch(
+        url,
+        {"repository_url": "https://github.com/ProLearn/Replaced"},
+        format="json",
+    )
+    cleared = api_client.patch(url, {"repository_url": None}, format="json")
+
+    assert created.status_code == 200
+    assert created.data["repository_url"] == (
+        "https://github.com/prolearn/initial"
+    )
+    assert kept.status_code == 200
+    assert kept.data["repository_url"] == "https://github.com/prolearn/initial"
+    assert edited.status_code == 200
+    assert edited.data["repository_url"] == "https://github.com/prolearn/replaced"
+    assert cleared.status_code == 200
+    assert cleared.data["repository_url"] is None
+    runtime_project_run.refresh_from_db()
+    assert runtime_project_run.repository_url is None
+    assert (
+        runtime_project_run.team_id,
+        runtime_project_run.project_version_id,
+        runtime_project_run.state,
+        runtime_project_run.started_at,
+        runtime_project_run.deadline_at,
+        runtime_project_run.ended_at,
+    ) == unchanged
+
+
 def test_staff_repository_assignment_rejects_normalized_duplicate_on_another_run(
     api_client,
     django_user_model,
@@ -323,11 +381,14 @@ def test_staff_repository_assignment_rejects_normalized_duplicate_on_another_run
     )
     duplicate = api_client.patch(
         f"/api/v1/project-runs/{other_run.id}/repository/",
-        {"repository_url": "http://github.com/prolearn/shared-repo/?source=staff"},
+        {"repository_url": "HTTP://GITHUB.COM/PROLEARN/SHARED-REPO/"},
         format="json",
     )
 
     assert first.status_code == 200
+    assert first.data["repository_url"] == (
+        "https://github.com/prolearn/shared-repo"
+    )
     assert same_run.status_code == 200
     assert duplicate.status_code == 400
     assert duplicate.data == {
@@ -346,9 +407,17 @@ def test_participant_and_anonymous_cannot_manage_project_run_repository(
     payload = {"repository_url": "https://github.com/prolearn/forbidden"}
 
     assert api_client.patch(url, payload, format="json").status_code == 403
+    assert (
+        api_client.patch(url, {"repository_url": None}, format="json").status_code
+        == 403
+    )
     api_client.force_login(backend_user)
     assert api_client.get("/api/v1/project-runs/").status_code == 403
     assert api_client.patch(url, payload, format="json").status_code == 403
+    assert (
+        api_client.patch(url, {"repository_url": None}, format="json").status_code
+        == 403
+    )
     runtime_project_run.refresh_from_db()
     assert runtime_project_run.repository_url is None
 
@@ -366,6 +435,146 @@ def test_invalid_project_run_repository_url_is_rejected(
     assert response.status_code == 400
     runtime_project_run.refresh_from_db()
     assert runtime_project_run.repository_url is None
+
+
+def test_staff_repository_update_rejects_spoofed_object_fields(
+    api_client,
+    facilitator,
+    runtime_project_run,
+):
+    api_client.force_login(facilitator)
+
+    response = api_client.patch(
+        f"/api/v1/project-runs/{runtime_project_run.id}/repository/",
+        {
+            "repository_url": "https://github.com/prolearn/scoped-run",
+            "project_run_id": "00000000-0000-4000-8000-000000000099",
+        },
+        format="json",
+    )
+
+    assert response.status_code == 400
+    assert response.data == {"project_run_id": ["Unknown field."]}
+    runtime_project_run.refresh_from_db()
+    assert runtime_project_run.repository_url is None
+
+
+@pytest.mark.parametrize(
+    "repository_url",
+    [
+        "https://github.com/prolearn/helpdesk/tree/main",
+        "https://github.com/prolearn/helpdesk/commit/deadbeef",
+        "https://github.com/prolearn/helpdesk/issues",
+        "https://github.com/prolearn/helpdesk/pull/1",
+        "https://github.com/prolearn/helpdesk?tab=readme",
+        "https://github.com/prolearn/helpdesk#readme",
+        "https://gitlab.com/prolearn/helpdesk",
+    ],
+)
+def test_staff_api_rejects_noncanonical_repository_root(
+    api_client,
+    facilitator,
+    runtime_project_run,
+    repository_url,
+):
+    api_client.force_login(facilitator)
+
+    response = api_client.patch(
+        f"/api/v1/project-runs/{runtime_project_run.id}/repository/",
+        {"repository_url": repository_url},
+        format="json",
+    )
+
+    assert response.status_code == 400
+    runtime_project_run.refresh_from_db()
+    assert runtime_project_run.repository_url is None
+
+
+def test_repository_uniqueness_allows_multiple_null_values_and_rejects_duplicate(
+    django_user_model,
+    facilitator,
+    runtime_project_run,
+    runtime_members,
+):
+    other_run = _create_other_project_run(
+        django_user_model=django_user_model,
+        project_run=runtime_project_run,
+        runtime_members=runtime_members,
+        facilitator=facilitator,
+    )
+    assert runtime_project_run.repository_url is None
+    assert other_run.repository_url is None
+
+    runtime_project_run.repository_url = "https://github.com/prolearn/db-unique"
+    runtime_project_run.save(update_fields=["repository_url"])
+    other_run.repository_url = "https://github.com/prolearn/db-unique"
+
+    with pytest.raises(IntegrityError), transaction.atomic():
+        other_run.save(update_fields=["repository_url"])
+
+
+def test_repository_integrity_race_is_mapped_to_controlled_api_error(
+    api_client,
+    facilitator,
+    runtime_project_run,
+):
+    api_client.force_login(facilitator)
+
+    with patch(
+        "apps.formations.services.ProjectRun.save",
+        side_effect=IntegrityError("formations_run_repository_unique"),
+    ):
+        response = api_client.patch(
+            f"/api/v1/project-runs/{runtime_project_run.id}/repository/",
+            {"repository_url": "https://github.com/prolearn/race"},
+            format="json",
+        )
+
+    assert response.status_code == 400
+    assert response.data == {
+        "repository_url": [
+            "This repository is already assigned to another ProjectRun."
+        ]
+    }
+
+
+@pytest.mark.django_db(transaction=True)
+def test_database_uniqueness_allows_only_one_concurrent_repository_assignment(
+    django_user_model,
+    facilitator,
+    runtime_project_run,
+    runtime_members,
+):
+    other_run = _create_other_project_run(
+        django_user_model=django_user_model,
+        project_run=runtime_project_run,
+        runtime_members=runtime_members,
+        facilitator=facilitator,
+    )
+    barrier = Barrier(2)
+    repository_url = "https://github.com/prolearn/concurrent-unique"
+
+    def assign(project_run_id):
+        close_old_connections()
+        try:
+            barrier.wait(timeout=5)
+            try:
+                ProjectRun.objects.filter(id=project_run_id).update(
+                    repository_url=repository_url
+                )
+            except IntegrityError:
+                return "rejected"
+            return "assigned"
+        finally:
+            close_old_connections()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(
+            executor.map(assign, (runtime_project_run.id, other_run.id))
+        )
+
+    assert sorted(results) == ["assigned", "rejected"]
+    assert ProjectRun.objects.filter(repository_url=repository_url).count() == 1
 
 
 def test_workspace_exposes_repository_url_and_allows_missing_value(

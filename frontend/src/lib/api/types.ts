@@ -235,6 +235,11 @@ export type CurrentProjectRunSummary = {
   ended_at: string | null
 }
 
+export type ProjectRunLifecycleResponse = Pick<
+  CurrentProjectRunSummary,
+  'id' | 'state' | 'started_at' | 'deadline_at' | 'ended_at'
+>
+
 export type ProjectRunProjectIdentity = {
   id: string
   name: string
@@ -286,12 +291,17 @@ export type SprintRunResponse = {
 export type SprintSubmissionResponse = {
   id: string
   submitted_by: TeamMemberSnapshot
+  final_commit_url: string | null
+  deployment_url: string | null
+  design_url_snapshot: string | null
   evidence: string
   submitted_at: string
+  review_decision: ParticipantReviewDecisionResponse | null
 }
 
 export type SprintRunDetailResponse = SprintRunResponse & {
   repository_url: string | null
+  design_workspace_url: string | null
   work_items: ProjectWorkItem[]
   latest_submission: SprintSubmissionResponse | null
   submissions: SprintSubmissionResponse[]
@@ -307,6 +317,7 @@ export type ProjectRunDashboardResponse = CurrentProjectRunSummary & {
 
 export type ProjectRunWorkspaceResponse = ProjectRunDashboardResponse & {
   repository_url: string | null
+  design_workspace_url: string | null
   sprints: SprintRunResponse[]
   resources: ProjectWorkItem[]
 }
@@ -326,6 +337,59 @@ export type StaffProjectRunRepository = {
   team_id: string
   state: ProjectRunState
   started_at: string
+  deadline_at: string
+  can_mark_incomplete: boolean
   repository_url: string | null
+  design_workspace_url: string | null
   members: StaffRepositoryTeamMember[]
+}
+
+export type ReviewDecisionType = 'CHANGES_REQUESTED' | 'COMPLETED'
+
+export type ParticipantReviewDecisionResponse = {
+  decision: ReviewDecisionType
+  feedback: string
+  reviewed_at: string
+}
+
+export type StaffReviewDecisionResponse = {
+  id: string
+  decision: ReviewDecisionType
+  feedback: string
+  reviewed_by: CurrentUser
+  reviewed_at: string
+}
+
+export type StaffSprintSubmissionSummaryResponse = {
+  id: string
+  submitted_by: TeamMemberSnapshot
+  submitted_at: string
+  review_decision: StaffReviewDecisionResponse | null
+}
+
+export type StaffSprintSubmissionResponse = Omit<SprintSubmissionResponse, 'review_decision'> & {
+  review_decision: StaffReviewDecisionResponse | null
+}
+
+export type StaffSprintRunListItem = {
+  id: string
+  project_run_id: string
+  sprint_template_id: string
+  sequence: number
+  title: string
+  state: SprintRunState
+  planned_start_at: string
+  planned_end_at: string
+  opened_at: string | null
+  completed_at: string | null
+  latest_submission: StaffSprintSubmissionSummaryResponse | null
+}
+
+export type StaffSprintRunDetailResponse = Omit<
+  StaffSprintRunListItem,
+  'latest_submission'
+> & {
+  brief: string
+  latest_submission: StaffSprintSubmissionResponse | null
+  submissions: StaffSprintSubmissionResponse[]
 }

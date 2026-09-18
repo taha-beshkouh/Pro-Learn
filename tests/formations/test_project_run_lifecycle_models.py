@@ -18,7 +18,11 @@ from apps.formations.services import (
     mark_project_run_incomplete,
     mark_sprint_under_review,
     open_sprint,
-    submit_sprint,
+)
+from tests.formations.structured_submission import submit_structured_sprint as submit_sprint
+from tests.formations.structured_submission import (
+    configure_submission_runtime,
+    structured_submission_kwargs,
 )
 
 
@@ -97,12 +101,18 @@ def test_database_submission_trigger_rejects_overdue_history(
 ):
     first = _ordered_sprints(overdue_runtime_project_run)[0]
     backend = overdue_runtime_members["BACKEND_DEVELOPER"]
+    configure_submission_runtime(overdue_runtime_project_run)
 
     with pytest.raises(IntegrityError), transaction.atomic():
         SprintSubmission.objects.create(
             sprint_run=first,
             submitted_by=backend,
             submitted_at=timezone.now(),
+            design_url_snapshot=overdue_runtime_project_run.design_workspace_url,
+            **structured_submission_kwargs(
+                project_run=overdue_runtime_project_run,
+                sprint_run_id=first.id,
+            ),
         )
 
 

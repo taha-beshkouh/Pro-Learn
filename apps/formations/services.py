@@ -16,17 +16,24 @@ from apps.formations.eligibility import (
 )
 from apps.formations.exceptions import (
     ActiveProjectReadinessExists,
+    DesignWorkspaceAccessDenied,
+    DesignWorkspaceRequired,
     FormationAlreadyReady,
     FormationCompletionConflict,
     InvalidFormationMembers,
     InvalidFormationReadiness,
     InvalidFormationStack,
     InvalidGithubUsername,
+    InvalidDesignWorkspaceUrl,
+    InvalidDeploymentUrl,
+    InvalidFinalCommitUrl,
+    InvalidReviewFeedback,
     InvalidProjectReadinessSelection,
     InvalidRepositoryUrl,
     MemberHasActiveProjectRun,
     MemberHasUnresolvedFormation,
     ProjectRunDeadlineNotReached,
+    ProjectRunRepositoryRequired,
     ProjectRunTransitionNotAllowed,
     ReadyCheckExpired,
     GithubUsernameRequired,
@@ -45,6 +52,8 @@ from apps.formations.models import (
     ProjectRunState,
     ReadyCheck,
     ReadyCheckStatus,
+    ReviewDecision,
+    ReviewDecisionType,
     SprintRun,
     SprintRunState,
     SprintSubmission,
@@ -86,6 +95,14 @@ ALLOWED_SPRINT_TRANSITIONS = {
     SprintRunState.CHANGES_REQUESTED: frozenset({SprintRunState.SUBMITTED}),
     SprintRunState.COMPLETED: frozenset(),
 }
+
+SPRINT_SUBMISSION_SOURCE_STATES = frozenset(
+    {
+        SprintRunState.ACTIVE,
+        SprintRunState.SUBMITTED,
+        SprintRunState.CHANGES_REQUESTED,
+    }
+)
 
 
 def _selection_uuid(value) -> UUID:
@@ -896,10 +913,14 @@ def replace_ready_check_member(
 
 @transaction.atomic
 def update_project_run_repository(
-    *, project_run_id, actor: User, repository_url: str
+    *, project_run_id, actor: User, repository_url: str | None
 ) -> ProjectRun:
     _require_active_staff(actor=actor)
-    normalized_url, repository_identity = _repository_url_identity(repository_url)
+    if repository_url is None or not repository_url.strip():
+        normalized_url = None
+        repository_identity = None
+    else:
+        normalized_url, repository_identity = _repository_url_identity(repository_url)
     # This operational endpoint is infrequent. Locking existing ProjectRuns in a
     # stable order serializes competing assignments made through this service.
     project_runs = list(
@@ -920,23 +941,39 @@ def update_project_run_repository(
     except StopIteration as exc:
         raise ProjectRun.DoesNotExist from exc
 
-    for existing_run in project_runs:
-        if existing_run.id == project_run.id or not existing_run.repository_url:
-            continue
-        try:
-            _, existing_identity = _repository_url_identity(
-                existing_run.repository_url
-            )
-        except InvalidRepositoryUrl:
-            # Historical invalid values are outside this write contract; they must
-            # not prevent Staff from correcting another ProjectRun.
-            continue
-        if existing_identity == repository_identity:
-            raise RepositoryAlreadyAssigned
+    if repository_identity is not None:
+        for existing_run in project_runs:
+            if existing_run.id == project_run.id or not existing_run.repository_url:
+                continue
+            try:
+                _, existing_identity = _repository_url_identity(
+                    existing_run.repository_url
+                )
+            except InvalidRepositoryUrl:
+                # Historical invalid values are outside this write contract; they must
+                # not prevent Staff from correcting another ProjectRun.
+                continue
+            if existing_identity == repository_identity:
+                raise RepositoryAlreadyAssigned
 
     project_run.repository_url = normalized_url
-    project_run.save(update_fields=["repository_url"])
+    try:
+        project_run.save(update_fields=["repository_url"])
+    except IntegrityError as exc:
+        if normalized_url is not None and _is_repository_unique_conflict(exc):
+            raise RepositoryAlreadyAssigned from exc
+        raise
     return project_run
+
+
+def _is_repository_unique_conflict(exc: IntegrityError) -> bool:
+    constraint_name = "formations_run_repository_unique"
+    cause = exc.__cause__
+    diagnostic = getattr(cause, "diag", None)
+    return (
+        getattr(diagnostic, "constraint_name", None) == constraint_name
+        or constraint_name in str(exc)
+    )
 
 
 def _repository_url_identity(
@@ -950,28 +987,149 @@ def _repository_url_identity(
     except (DjangoValidationError, ValueError) as exc:
         raise InvalidRepositoryUrl from exc
 
-    if parsed.username is not None or parsed.password is not None or not parsed.hostname:
+    if (
+        parsed.username is not None
+        or parsed.password is not None
+        or not parsed.hostname
+        or parsed.query
+        or parsed.fragment
+    ):
         raise InvalidRepositoryUrl
 
     hostname = parsed.hostname.casefold()
     if hostname == "www.github.com":
         hostname = "github.com"
-    if port in {80, 443}:
-        port = None
+    if hostname != "github.com" or port is not None:
+        raise InvalidRepositoryUrl
 
-    path = parsed.path.rstrip("/")
+    path = parsed.path[:-1] if parsed.path.endswith("/") else parsed.path
+    if path.endswith("/"):
+        raise InvalidRepositoryUrl
     if path.casefold().endswith(".git"):
         path = path[:-4]
-    comparison_path = path.casefold() if hostname == "github.com" else path
+    path_parts = path.split("/")
+    if len(path_parts) != 3 or path_parts[0] or not all(path_parts[1:]):
+        raise InvalidRepositoryUrl
+    owner, repository = path_parts[1:]
+    try:
+        validate_github_username(owner)
+    except DjangoValidationError as exc:
+        raise InvalidRepositoryUrl from exc
+    allowed_repository_characters = frozenset("-_.")
+    if (
+        repository in {".", ".."}
+        or any(
+            not character.isascii()
+            or not (character.isalnum() or character in allowed_repository_characters)
+            for character in repository
+        )
+    ):
+        raise InvalidRepositoryUrl
 
-    storage_host = f"[{hostname}]" if ":" in hostname else hostname
-    if port is not None:
-        storage_host = f"{storage_host}:{port}"
-    storage_path = comparison_path if hostname == "github.com" else path
-    normalized_url = urlunsplit(
-        (parsed.scheme.casefold(), storage_host, storage_path, "", "")
+    comparison_path = f"/{owner.casefold()}/{repository.casefold()}"
+    normalized_url = urlunsplit(("https", hostname, comparison_path, "", ""))
+    return normalized_url, (hostname, None, comparison_path)
+
+
+def _validated_external_url(url: str, *, error_class):
+    try:
+        candidate = url.strip()
+        if len(candidate) > 500:
+            raise ValueError
+        URLValidator(schemes=["http", "https"])(candidate)
+        parsed = urlsplit(candidate)
+        parsed.port
+    except (AttributeError, DjangoValidationError, ValueError) as exc:
+        raise error_class from exc
+    if (
+        parsed.scheme.casefold() not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise error_class
+    return candidate
+
+
+def _final_commit_url_for_repository(
+    *, final_commit_url: str, repository_identity
+) -> str:
+    try:
+        candidate = final_commit_url.strip()
+        if len(candidate) > 500:
+            raise ValueError
+        URLValidator(schemes=["http", "https"])(candidate)
+        parsed = urlsplit(candidate)
+        port = parsed.port
+    except (AttributeError, DjangoValidationError, ValueError) as exc:
+        raise InvalidFinalCommitUrl from exc
+    if (
+        parsed.username is not None
+        or parsed.password is not None
+        or not parsed.hostname
+        or parsed.query
+        or parsed.fragment
+        or port is not None
+    ):
+        raise InvalidFinalCommitUrl
+    hostname = parsed.hostname.casefold()
+    if hostname == "www.github.com":
+        hostname = "github.com"
+    path_parts = parsed.path.strip("/").split("/")
+    if (
+        hostname != "github.com"
+        or len(path_parts) != 4
+        or path_parts[2].casefold() != "commit"
+    ):
+        raise InvalidFinalCommitUrl
+    owner, repository, _, revision = path_parts
+    try:
+        repository_root, commit_repository_identity = _repository_url_identity(
+            f"https://github.com/{owner}/{repository}"
+        )
+    except InvalidRepositoryUrl as exc:
+        raise InvalidFinalCommitUrl from exc
+    if commit_repository_identity != repository_identity:
+        raise InvalidFinalCommitUrl
+    if len(revision) not in {40, 64} or any(
+        character not in "0123456789abcdefABCDEF" for character in revision
+    ):
+        raise InvalidFinalCommitUrl
+    return f"{repository_root}/commit/{revision.casefold()}"
+
+
+@transaction.atomic
+def update_project_run_design_workspace(
+    *, project_run_id, actor: User, design_workspace_url: str
+) -> ProjectRun:
+    if not actor.is_active:
+        raise DesignWorkspaceAccessDenied
+    project_run = ProjectRun.objects.select_for_update(of=("self",)).get(
+        id=project_run_id,
+        state=ProjectRunState.ACTIVE,
+        ended_at__isnull=True,
     )
-    return normalized_url, (hostname, port, comparison_path)
+    if not actor.is_staff:
+        try:
+            member = (
+                TeamMember.objects.select_for_update(of=("self",))
+                .select_related("role")
+                .get(
+                    project_run=project_run,
+                    user=actor,
+                    ended_at__isnull=True,
+                )
+            )
+        except TeamMember.DoesNotExist as exc:
+            raise ProjectRun.DoesNotExist from exc
+        if member.role.code != RoleCode.PRODUCT_DESIGNER:
+            raise DesignWorkspaceAccessDenied
+    project_run.design_workspace_url = _validated_external_url(
+        design_workspace_url,
+        error_class=InvalidDesignWorkspaceUrl,
+    )
+    project_run.save(update_fields=["design_workspace_url"])
+    return project_run
 
 
 def _locked_sprint_run(*, sprint_run_id, project_run_id=None):
@@ -1035,6 +1193,8 @@ def submit_sprint(
     sprint_run_id,
     user: User,
     evidence: str = "",
+    final_commit_url: str | None = None,
+    deployment_url: str | None = None,
     project_run_id=None,
     now=None,
 ) -> tuple[SprintRun, SprintSubmission]:
@@ -1055,18 +1215,46 @@ def submit_sprint(
         raise SprintAccessDenied from exc
     if submission_deadline_passed(now=now, deadline_at=project_run.deadline_at):
         raise SprintDeadlinePassed
-    validate_sprint_transition(
-        current_state=sprint_run.state,
-        target_state=SprintRunState.SUBMITTED,
+    source_state = sprint_run.state
+    if source_state not in SPRINT_SUBMISSION_SOURCE_STATES:
+        raise SprintTransitionNotAllowed
+    if source_state != SprintRunState.SUBMITTED:
+        validate_sprint_transition(
+            current_state=source_state,
+            target_state=SprintRunState.SUBMITTED,
+        )
+    if not project_run.repository_url:
+        raise ProjectRunRepositoryRequired
+    try:
+        _, repository_identity = _repository_url_identity(project_run.repository_url)
+    except InvalidRepositoryUrl as exc:
+        raise ProjectRunRepositoryRequired from exc
+    if not project_run.design_workspace_url:
+        raise DesignWorkspaceRequired
+    final_commit_url = _final_commit_url_for_repository(
+        final_commit_url=final_commit_url or "",
+        repository_identity=repository_identity,
+    )
+    deployment_url = _validated_external_url(
+        deployment_url or "",
+        error_class=InvalidDeploymentUrl,
+    )
+    design_url_snapshot = _validated_external_url(
+        project_run.design_workspace_url,
+        error_class=DesignWorkspaceRequired,
     )
     submission = SprintSubmission.objects.create(
         sprint_run=sprint_run,
         submitted_by=member,
         evidence=evidence,
+        final_commit_url=final_commit_url,
+        deployment_url=deployment_url,
+        design_url_snapshot=design_url_snapshot,
         submitted_at=now,
     )
-    sprint_run.state = SprintRunState.SUBMITTED
-    sprint_run.save(update_fields=["state", "updated_at"])
+    if source_state != SprintRunState.SUBMITTED:
+        sprint_run.state = SprintRunState.SUBMITTED
+        sprint_run.save(update_fields=["state", "updated_at"])
     return sprint_run, submission
 
 
@@ -1079,8 +1267,9 @@ def _staff_transition_sprint(
     now=None,
 ) -> SprintRun:
     _require_active_staff(actor=actor)
-    now = now or timezone.now()
-    project_run, sprint_run = _locked_sprint_run(
+    if target_state != SprintRunState.UNDER_REVIEW:
+        raise SprintTransitionNotAllowed
+    _, sprint_run = _locked_sprint_run(
         sprint_run_id=sprint_run_id,
         project_run_id=project_run_id,
     )
@@ -1089,13 +1278,78 @@ def _staff_transition_sprint(
         target_state=target_state,
     )
     sprint_run.state = target_state
+    sprint_run.save(update_fields=["state", "updated_at"])
+    return sprint_run
+
+
+def _normalized_review_feedback(*, feedback, required: bool) -> str:
+    if feedback is None:
+        normalized = ""
+    elif isinstance(feedback, str):
+        normalized = feedback.strip()
+    else:
+        raise InvalidReviewFeedback
+    if required and not normalized:
+        raise InvalidReviewFeedback
+    return normalized
+
+
+def _latest_submission_for_review(*, sprint_run: SprintRun) -> SprintSubmission:
+    submission = (
+        SprintSubmission.objects.select_for_update(of=("self",))
+        .filter(sprint_run=sprint_run)
+        .order_by("-submitted_at", "-id")
+        .first()
+    )
+    if submission is None:
+        raise SprintRuntimeConfigurationError
+    return submission
+
+
+@transaction.atomic
+def _finalize_sprint_review(
+    *,
+    sprint_run_id,
+    actor: User,
+    decision: str,
+    feedback=None,
+    project_run_id=None,
+    now=None,
+) -> SprintRun:
+    _require_active_staff(actor=actor)
+    if decision not in ReviewDecisionType.values:
+        raise SprintTransitionNotAllowed
+    now = now or timezone.now()
+    project_run, sprint_run = _locked_sprint_run(
+        sprint_run_id=sprint_run_id,
+        project_run_id=project_run_id,
+    )
+    validate_sprint_transition(
+        current_state=sprint_run.state,
+        target_state=decision,
+    )
+    submission = _latest_submission_for_review(sprint_run=sprint_run)
+    if ReviewDecision.objects.filter(sprint_submission=submission).exists():
+        raise SprintTransitionNotAllowed
+    normalized_feedback = _normalized_review_feedback(
+        feedback=feedback,
+        required=decision == ReviewDecisionType.CHANGES_REQUESTED,
+    )
+    ReviewDecision.objects.create(
+        sprint_submission=submission,
+        reviewed_by=actor,
+        decision=decision,
+        feedback=normalized_feedback,
+        reviewed_at=now,
+    )
+    sprint_run.state = decision
     update_fields = ["state", "updated_at"]
-    if target_state == SprintRunState.COMPLETED:
+    if decision == ReviewDecisionType.COMPLETED:
         sprint_run.completed_at = now
         update_fields.append("completed_at")
     sprint_run.save(update_fields=update_fields)
     if (
-        target_state == SprintRunState.COMPLETED
+        decision == ReviewDecisionType.COMPLETED
         and _is_final_sprint_run(
             project_run=project_run,
             sprint_run=sprint_run,
@@ -1186,16 +1440,18 @@ def mark_sprint_under_review(**kwargs) -> SprintRun:
 
 
 @transaction.atomic
-def request_sprint_changes(**kwargs) -> SprintRun:
-    return _staff_transition_sprint(
-        target_state=SprintRunState.CHANGES_REQUESTED,
+def request_sprint_changes(*, feedback=None, **kwargs) -> SprintRun:
+    return _finalize_sprint_review(
+        decision=ReviewDecisionType.CHANGES_REQUESTED,
+        feedback=feedback,
         **kwargs,
     )
 
 
 @transaction.atomic
-def complete_sprint(**kwargs) -> SprintRun:
-    return _staff_transition_sprint(
-        target_state=SprintRunState.COMPLETED,
+def complete_sprint(*, feedback="", **kwargs) -> SprintRun:
+    return _finalize_sprint_review(
+        decision=ReviewDecisionType.COMPLETED,
+        feedback=feedback,
         **kwargs,
     )

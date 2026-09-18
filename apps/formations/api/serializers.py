@@ -1,4 +1,5 @@
 from django.core.validators import URLValidator
+from django.utils import timezone
 from rest_framework import serializers
 
 from apps.accounts.api.serializers import UserOutputSerializer
@@ -6,7 +7,9 @@ from apps.common.serializers import StrictFieldsSerializer
 from apps.formations.models import (
     ProjectReadiness,
     ProjectRun,
+    ProjectRunState,
     ReadyCheck,
+    ReviewDecision,
     SprintRun,
     SprintRunState,
     SprintSubmission,
@@ -177,11 +180,32 @@ class OpenSprintInputSerializer(StrictFieldsSerializer):
 
 
 class SprintSubmissionInputSerializer(StrictFieldsSerializer):
+    final_commit_url = serializers.URLField(
+        max_length=500,
+        validators=[URLValidator(schemes=["http", "https"])],
+    )
+    deployment_url = serializers.URLField(
+        max_length=500,
+        validators=[URLValidator(schemes=["http", "https"])],
+    )
     evidence = serializers.CharField(allow_blank=True, required=False, default="")
 
 
 class EmptyActionInputSerializer(StrictFieldsSerializer):
     pass
+
+
+class RequestSprintChangesInputSerializer(StrictFieldsSerializer):
+    feedback = serializers.CharField(allow_blank=False, trim_whitespace=True)
+
+
+class CompleteSprintInputSerializer(StrictFieldsSerializer):
+    feedback = serializers.CharField(
+        allow_blank=True,
+        required=False,
+        default="",
+        trim_whitespace=True,
+    )
 
 
 class TeamMemberSnapshotSerializer(serializers.ModelSerializer):
@@ -210,6 +234,7 @@ class StaffProjectRunRepositorySerializer(serializers.ModelSerializer):
     project = serializers.SerializerMethodField()
     team_id = serializers.UUIDField(read_only=True)
     members = StaffRepositoryTeamMemberSerializer(many=True, read_only=True)
+    can_mark_incomplete = serializers.SerializerMethodField()
 
     class Meta:
         model = ProjectRun
@@ -219,7 +244,10 @@ class StaffProjectRunRepositorySerializer(serializers.ModelSerializer):
             "team_id",
             "state",
             "started_at",
+            "deadline_at",
+            "can_mark_incomplete",
             "repository_url",
+            "design_workspace_url",
             "members",
         )
         read_only_fields = fields
@@ -232,22 +260,167 @@ class StaffProjectRunRepositorySerializer(serializers.ModelSerializer):
             "version_number": obj.project_version.version_number,
         }
 
+    def get_can_mark_incomplete(self, obj):
+        # Presentation only; the locked service rechecks state and server time.
+        return (
+            obj.state == ProjectRunState.ACTIVE
+            and obj.ended_at is None
+            and timezone.now() >= obj.deadline_at
+        )
+
 
 class ProjectRunRepositoryInputSerializer(StrictFieldsSerializer):
     repository_url = serializers.URLField(
         max_length=500,
-        allow_blank=False,
+        allow_blank=True,
+        allow_null=True,
         validators=[URLValidator(schemes=["http", "https"])],
     )
 
 
+class ProjectRunDesignWorkspaceInputSerializer(StrictFieldsSerializer):
+    design_workspace_url = serializers.URLField(
+        max_length=500,
+        validators=[URLValidator(schemes=["http", "https"])],
+    )
+
+
+class ProjectRunDesignWorkspaceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProjectRun
+        fields = ("id", "design_workspace_url")
+        read_only_fields = fields
+
+
+class ParticipantReviewDecisionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ReviewDecision
+        fields = ("decision", "feedback", "reviewed_at")
+        read_only_fields = fields
+
+
 class SprintSubmissionSerializer(serializers.ModelSerializer):
     submitted_by = TeamMemberSnapshotSerializer(read_only=True)
+    review_decision = ParticipantReviewDecisionSerializer(
+        read_only=True,
+        allow_null=True,
+    )
 
     class Meta:
         model = SprintSubmission
-        fields = ("id", "submitted_by", "evidence", "submitted_at")
+        fields = (
+            "id",
+            "submitted_by",
+            "final_commit_url",
+            "deployment_url",
+            "design_url_snapshot",
+            "evidence",
+            "submitted_at",
+            "review_decision",
+        )
         read_only_fields = fields
+
+
+class StaffReviewDecisionSerializer(serializers.ModelSerializer):
+    reviewed_by = UserOutputSerializer(read_only=True)
+
+    class Meta:
+        model = ReviewDecision
+        fields = (
+            "id",
+            "decision",
+            "feedback",
+            "reviewed_by",
+            "reviewed_at",
+        )
+        read_only_fields = fields
+
+
+class StaffSprintSubmissionSerializer(SprintSubmissionSerializer):
+    review_decision = StaffReviewDecisionSerializer(
+        read_only=True,
+        allow_null=True,
+    )
+
+    class Meta(SprintSubmissionSerializer.Meta):
+        fields = SprintSubmissionSerializer.Meta.fields
+        read_only_fields = fields
+
+
+class StaffSprintSubmissionSummarySerializer(serializers.ModelSerializer):
+    submitted_by = TeamMemberSnapshotSerializer(read_only=True)
+    review_decision = StaffReviewDecisionSerializer(
+        read_only=True,
+        allow_null=True,
+    )
+
+    class Meta:
+        model = SprintSubmission
+        fields = (
+            "id",
+            "submitted_by",
+            "submitted_at",
+            "review_decision",
+        )
+        read_only_fields = fields
+
+
+def _latest_prefetched_submission(sprint_run: SprintRun):
+    submissions = list(sprint_run.submissions.all())
+    return submissions[-1] if submissions else None
+
+
+class StaffSprintRunListSerializer(serializers.ModelSerializer):
+    project_run_id = serializers.UUIDField(read_only=True)
+    sprint_template_id = serializers.UUIDField(read_only=True)
+    sequence = serializers.IntegerField(
+        source="sprint_template.sequence",
+        read_only=True,
+    )
+    title = serializers.CharField(source="sprint_template.title", read_only=True)
+    latest_submission = serializers.SerializerMethodField()
+
+    class Meta:
+        model = SprintRun
+        fields = (
+            "id",
+            "project_run_id",
+            "sprint_template_id",
+            "sequence",
+            "title",
+            "state",
+            "planned_start_at",
+            "planned_end_at",
+            "opened_at",
+            "completed_at",
+            "latest_submission",
+        )
+        read_only_fields = fields
+
+    def get_latest_submission(self, obj):
+        submission = _latest_prefetched_submission(obj)
+        if submission is None:
+            return None
+        return StaffSprintSubmissionSummarySerializer(submission).data
+
+
+class StaffSprintRunDetailSerializer(StaffSprintRunListSerializer):
+    brief = serializers.CharField(source="sprint_template.brief", read_only=True)
+    submissions = StaffSprintSubmissionSerializer(many=True, read_only=True)
+
+    class Meta(StaffSprintRunListSerializer.Meta):
+        fields = (
+            *StaffSprintRunListSerializer.Meta.fields,
+            "brief",
+            "submissions",
+        )
+        read_only_fields = fields
+
+    def get_latest_submission(self, obj):
+        submission = _latest_prefetched_submission(obj)
+        if submission is None:
+            return None
+        return StaffSprintSubmissionSerializer(submission).data
 
 
 class SprintRunSerializer(serializers.ModelSerializer):
@@ -367,6 +540,7 @@ class ProjectRunWorkspaceSerializer(ProjectRunDashboardSerializer):
         fields = (
             *ProjectRunDashboardSerializer.Meta.fields,
             "repository_url",
+            "design_workspace_url",
             "sprints",
             "resources",
         )
@@ -391,6 +565,11 @@ class SprintRunDetailSerializer(SprintRunSerializer):
         allow_null=True,
         read_only=True,
     )
+    design_workspace_url = serializers.URLField(
+        source="workspace_project_run.design_workspace_url",
+        allow_null=True,
+        read_only=True,
+    )
     latest_submission = serializers.SerializerMethodField()
     submissions = SprintSubmissionSerializer(many=True, read_only=True)
     work_items = serializers.SerializerMethodField()
@@ -399,6 +578,7 @@ class SprintRunDetailSerializer(SprintRunSerializer):
         fields = (
             *SprintRunSerializer.Meta.fields,
             "repository_url",
+            "design_workspace_url",
             "work_items",
             "latest_submission",
             "submissions",

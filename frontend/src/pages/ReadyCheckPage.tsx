@@ -461,7 +461,7 @@ function DecisionPanel({
             <strong id="decline-confirmation-title">
               رد مشارکت را ثبت می‌کنید؟
             </strong>
-            <p>این تصمیم در این صفحه قابل بازگردانی نیست.</p>
+            <p>با رد Ready Check، از Formation جاری کنار می‌روید و تیم می‌تواند جایگاه نقش شما را جایگزین کند. این تصمیم در این صفحه قابل بازگردانی نیست؛ هنوز ProjectRun فعالی شروع نشده است.</p>
           </div>
           <div>
             <Button

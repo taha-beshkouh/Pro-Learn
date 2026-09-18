@@ -6,7 +6,10 @@ import pytest
 from django.db import close_old_connections
 from django.utils import timezone
 
-from apps.formations.eligibility import ParticipationBlocker
+from apps.formations.eligibility import (
+    ParticipationBlocker,
+    participation_blocker_for_user,
+)
 from apps.formations.exceptions import (
     InvalidFormationMembers,
     InvalidProjectReadinessSelection,
@@ -15,6 +18,7 @@ from apps.formations.models import (
     ProjectReadiness,
     ProjectRun,
     ProjectRunState,
+    ReadyCheckStatus,
     SprintRunState,
 )
 from apps.formations.services import (
@@ -27,10 +31,10 @@ from apps.formations.services import (
     mark_sprint_under_review,
     open_sprint,
     replace_ready_check_member,
-    submit_sprint,
 )
 from apps.profiles.models import UserProfile
 from apps.profiles.services import RoleChangeBlocked, select_profile_role
+from tests.formations.structured_submission import submit_structured_sprint as submit_sprint
 
 
 pytestmark = [pytest.mark.django_db, pytest.mark.postgresql]
@@ -117,6 +121,49 @@ def test_current_unresolved_formation_blocks_role_change_and_preserves_role(
         requested_role=frontend_role,
         expected_reason=ParticipationBlocker.CURRENT_FORMATION_OR_READY_CHECK,
     )
+
+
+# Commit the valid fixture insert before changing the profile role: its INSERT
+# compatibility constraint is deferred until the enclosing transaction commits.
+@pytest.mark.django_db(transaction=True)
+def test_declined_user_is_released_before_staff_replaces_the_slot(
+    formation,
+    backend_user,
+    frontend_role,
+):
+    ready_check = formation.ready_checks.get(user=backend_user, is_current=True)
+    assert ready_check.role_id == UserProfile.objects.get(user=backend_user).selected_role_id
+    assert ready_check.status == ReadyCheckStatus.PENDING
+    decline_ready_check(ready_check_id=ready_check.id, user=backend_user)
+
+    ready_check.refresh_from_db()
+    assert ready_check.status == ReadyCheckStatus.DECLINED
+    assert ready_check.is_current is True  # The role slot awaits Staff replacement.
+    assert participation_blocker_for_user(user_id=backend_user.id) is None
+    changed = select_profile_role(user=backend_user, role=frontend_role)
+    assert changed.selected_role_id == frontend_role.id
+
+
+# The same deferred INSERT check must finish before effective expiry and role change.
+@pytest.mark.django_db(transaction=True)
+def test_expired_user_is_released_without_participant_action(
+    formation,
+    backend_user,
+    frontend_role,
+    monkeypatch,
+):
+    ready_check = formation.ready_checks.get(user=backend_user, is_current=True)
+    assert ready_check.role_id == UserProfile.objects.get(user=backend_user).selected_role_id
+    assert ready_check.status == ReadyCheckStatus.PENDING
+    monkeypatch.setattr(
+        "apps.formations.eligibility.timezone.now",
+        lambda: ready_check.expires_at,
+    )
+    assert ready_check.effective_status() == ReadyCheckStatus.EXPIRED
+    assert ready_check.is_current is True  # The role slot awaits Staff replacement.
+    assert participation_blocker_for_user(user_id=backend_user.id) is None
+    changed = select_profile_role(user=backend_user, role=frontend_role)
+    assert changed.selected_role_id == frontend_role.id
 
 
 @pytest.mark.django_db(transaction=True)

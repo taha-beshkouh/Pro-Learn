@@ -447,6 +447,8 @@ describe('ReadyCheckPage', () => {
     expect(
       screen.getByText('رد مشارکت را ثبت می‌کنید؟'),
     ).toBeInTheDocument()
+    expect(screen.getByText(/از Formation جاری کنار می‌روید/)).toBeInTheDocument()
+    expect(screen.getByText(/هنوز ProjectRun فعالی شروع نشده است/)).toBeInTheDocument()
     expect(
       callsFor(
         fetchMock,
@@ -459,6 +461,7 @@ describe('ReadyCheckPage', () => {
     expect(
       await screen.findByRole('heading', { name: 'رد شده' }),
     ).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'رد مشارکت' })).not.toBeInTheDocument()
     const declineCall = callsFor(
       fetchMock,
       '/api/v1/ready-checks/ready-check-from-api/decline/',

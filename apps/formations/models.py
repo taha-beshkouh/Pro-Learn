@@ -35,6 +35,11 @@ class ProjectRunState(models.TextChoices):
     INCOMPLETE = "INCOMPLETE", "Incomplete"
 
 
+class ReviewDecisionType(models.TextChoices):
+    CHANGES_REQUESTED = "CHANGES_REQUESTED", "Changes requested"
+    COMPLETED = "COMPLETED", "Completed"
+
+
 class ProjectReadiness(models.Model):
     """An authenticated user's active or historical pre-formation readiness."""
 
@@ -146,6 +151,7 @@ class ProjectRun(models.Model):
     deadline_at = models.DateTimeField(editable=False)
     ended_at = models.DateTimeField(null=True, blank=True, editable=False)
     repository_url = models.URLField(max_length=500, null=True, blank=True)
+    design_workspace_url = models.URLField(max_length=500, null=True, blank=True)
 
     class Meta:
         ordering = ["-started_at", "id"]
@@ -174,7 +180,12 @@ class ProjectRun(models.Model):
             models.CheckConstraint(
                 condition=Q(ended_at__isnull=True) | Q(ended_at__gte=F("started_at")),
                 name="formations_run_end_after_start",
-            )
+            ),
+            models.UniqueConstraint(
+                fields=["repository_url"],
+                condition=Q(repository_url__isnull=False),
+                name="formations_run_repository_unique",
+            ),
         ]
         indexes = [
             models.Index(
@@ -328,6 +339,9 @@ class SprintSubmission(models.Model):
         on_delete=models.PROTECT,
         related_name="sprint_submissions",
     )
+    final_commit_url = models.URLField(max_length=500, null=True, blank=True)
+    deployment_url = models.URLField(max_length=500, null=True, blank=True)
+    design_url_snapshot = models.URLField(max_length=500, null=True, blank=True)
     evidence = models.TextField(blank=True)
     submitted_at = models.DateTimeField(default=timezone.now, editable=False)
 
@@ -337,6 +351,37 @@ class SprintSubmission(models.Model):
             models.Index(
                 fields=["sprint_run", "submitted_at"],
                 name="formations_submission_time_idx",
+            )
+        ]
+
+
+class ReviewDecision(models.Model):
+    """Append-only final Staff decision for one exact Sprint submission."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    sprint_submission = models.OneToOneField(
+        SprintSubmission,
+        on_delete=models.PROTECT,
+        related_name="review_decision",
+    )
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="sprint_review_decisions",
+    )
+    decision = models.CharField(
+        max_length=20,
+        choices=ReviewDecisionType.choices,
+    )
+    feedback = models.TextField(blank=True)
+    reviewed_at = models.DateTimeField(default=timezone.now, editable=False)
+
+    class Meta:
+        ordering = ["reviewed_at", "id"]
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(decision__in=ReviewDecisionType.values),
+                name="formations_review_decision_known",
             )
         ]
 

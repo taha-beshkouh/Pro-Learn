@@ -1,11 +1,12 @@
 import type {
+  ParticipantReviewDecisionResponse,
   ProjectWorkItem,
   SprintRunDetailResponse,
   SprintRunState,
   SprintSubmissionResponse,
 } from './api/types'
 
-export type SprintDetailAction = 'submit' | 'resubmit' | null
+export type SprintDetailAction = 'submit' | 'update' | 'resubmit' | null
 
 export type SprintDetailViewModel = {
   sprint: SprintRunDetailResponse
@@ -18,6 +19,7 @@ export type SprintDetailViewModel = {
   workItems: ProjectWorkItem[]
   latestSubmission: SprintSubmissionResponse | null
   historicalSubmissions: SprintSubmissionResponse[]
+  currentChangesDecision: ParticipantReviewDecisionResponse | null
 }
 
 const statePresentation: Record<
@@ -39,8 +41,8 @@ const statePresentation: Record<
   SUBMITTED: {
     status: { label: 'ارسال‌شده', tone: 'warning' },
     notice:
-      'ارسال این اسپرینت ثبت شده است و در حال حاضر عملیات ارسال دیگری در دسترس نیست.',
-    action: null,
+      'ارسال فعلی ثبت شده است. تا پیش از شروع بررسی می‌توانید نسخه جدیدتری ثبت کنید؛ ارسال‌های قبلی در سابقه باقی می‌مانند.',
+    action: 'update',
   },
   UNDER_REVIEW: {
     status: { label: 'در حال بررسی', tone: 'warning' },
@@ -72,6 +74,11 @@ export function buildSprintDetailViewModel(
     // Preserve the backend's authoritative visibility and ordering.
     workItems: [...sprint.work_items],
     latestSubmission: sprint.latest_submission,
+    currentChangesDecision:
+      sprint.state === 'CHANGES_REQUESTED' &&
+      sprint.latest_submission?.review_decision?.decision === 'CHANGES_REQUESTED'
+        ? sprint.latest_submission.review_decision
+        : null,
     historicalSubmissions: sprint.latest_submission
       ? sprint.submissions.filter(
           (submission) => submission.id !== sprint.latest_submission?.id,

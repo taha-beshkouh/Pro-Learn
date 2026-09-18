@@ -1,7 +1,7 @@
 import { authErrorMessage } from './auth'
 import { ApiError, apiClient } from './client'
 import { API_ENDPOINTS } from './endpoints'
-import type { StaffProjectRunRepository } from './types'
+import type { ProjectRunLifecycleResponse, StaffProjectRunRepository } from './types'
 
 export function loadStaffProjectRunRepositories(signal?: AbortSignal) {
   return apiClient.get<StaffProjectRunRepository[]>(
@@ -10,9 +10,35 @@ export function loadStaffProjectRunRepositories(signal?: AbortSignal) {
   )
 }
 
+export function markStaffProjectRunIncomplete(projectRunId: string) {
+  return apiClient.post<ProjectRunLifecycleResponse>(
+    API_ENDPOINTS.projectRuns.markIncomplete(projectRunId),
+    {},
+  )
+}
+
+export function staffIncompleteErrorMessage(error: unknown) {
+  if (!(error instanceof ApiError)) {
+    return 'ارتباط با سرور برقرار نشد. دوباره تلاش کنید.'
+  }
+  if (error.status === 409) {
+    return `${error.message} وضعیت ProjectRun دوباره بارگذاری می‌شود.`
+  }
+  if (error.status === 404) {
+    return 'ProjectRun موردنظر پیدا نشد یا دیگر فعال نیست.'
+  }
+  if (error.status === 403) {
+    return 'این عملیات فقط برای Staff/Admin فعال در دسترس است.'
+  }
+  if (error.status === 400) {
+    return error.message || 'درخواست ثبت وضعیت ناتمام معتبر نیست.'
+  }
+  return staffRepositoryErrorMessage(error)
+}
+
 export function saveProjectRunRepository(
   projectRunId: string,
-  repositoryUrl: string,
+  repositoryUrl: string | null,
 ) {
   return apiClient.patch<StaffProjectRunRepository>(
     API_ENDPOINTS.projectRuns.repository(projectRunId),
@@ -50,7 +76,7 @@ export function staffRepositoryErrorMessage(error: unknown) {
     ) {
       return 'این مخزن قبلاً برای ProjectRun دیگری ثبت شده است.'
     }
-    return 'آدرس مخزن معتبر نیست. یک نشانی کامل HTTP یا HTTPS وارد کنید.'
+    return 'آدرس معتبر نیست. نشانی ریشه مخزن GitHub را وارد کنید.'
   }
   return authErrorMessage(error)
 }

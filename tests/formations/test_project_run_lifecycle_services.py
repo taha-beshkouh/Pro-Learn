@@ -1,9 +1,12 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from threading import Barrier
+from time import sleep
+from uuid import uuid4
 
 import pytest
-from django.db import close_old_connections
+from django.db import close_old_connections, connection
+from django.utils.dateparse import parse_datetime
 
 from apps.formations.exceptions import (
     ProjectRunDeadlineNotReached,
@@ -26,8 +29,8 @@ from apps.formations.services import (
     mark_sprint_under_review,
     open_sprint,
     request_sprint_changes,
-    submit_sprint,
 )
+from tests.formations.structured_submission import submit_structured_sprint as submit_sprint
 
 
 pytestmark = [pytest.mark.django_db, pytest.mark.postgresql]
@@ -150,6 +153,7 @@ def test_resubmission_after_deadline_is_rejected_in_same_sprint(
     request_sprint_changes(
         sprint_run_id=first.id,
         actor=facilitator,
+        feedback="Address the requested corrections.",
         now=after_deadline,
     )
 
@@ -263,6 +267,161 @@ def test_manual_incomplete_before_deadline_is_rejected(
             actor=facilitator,
             now=runtime_project_run.deadline_at - timedelta(microseconds=1),
         )
+
+
+# Commit valid submission/review history before the real database deadline;
+# a historical service `now` cannot override the PostgreSQL clock_timestamp() guard.
+@pytest.mark.django_db(transaction=True)
+def test_staff_incomplete_api_exposes_server_eligibility_and_preserves_history(
+    api_client,
+    facilitator,
+    helpdesk_version,
+    proposed_members,
+    runtime_sprint_templates,
+    runtime_work_items,
+):
+    # The fixed ProjectVersion duration determines the deadline. Start this
+    # test's own run so its deadline is briefly in the future, then let actual
+    # PostgreSQL time pass; never rewrite an immutable ProjectRun deadline.
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT clock_timestamp()")
+        database_now = cursor.fetchone()[0]
+    target_deadline = database_now + timedelta(seconds=10)
+    startup_at = target_deadline - timedelta(weeks=helpdesk_version.duration_weeks)
+    formation = create_team_formation(
+        created_by=facilitator,
+        readiness_ids=[readiness.id for readiness in proposed_members],
+        now=startup_at - timedelta(hours=1),
+    )
+    for ready_check in formation.ready_checks.order_by("role__code"):
+        confirm_ready_check(
+            ready_check_id=ready_check.id,
+            user=ready_check.user,
+            now=startup_at,
+        )
+    project_run = ProjectRun.objects.get(team__formation=formation)
+    assert project_run.state == ProjectRunState.ACTIVE
+    assert project_run.deadline_at == target_deadline
+    first = _ordered_sprints(project_run)[0]
+    assert first.state == SprintRunState.ACTIVE
+    assert first.opened_at == project_run.started_at
+    backend = project_run.members.get(role__code="BACKEND_DEVELOPER")
+
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT clock_timestamp()")
+        assert cursor.fetchone()[0] < project_run.deadline_at
+    submitted_at = project_run.started_at + timedelta(days=1)
+    _complete_sprint(
+        sprint_run=first,
+        member=backend,
+        facilitator=facilitator,
+        now=submitted_at,
+    )
+    first.refresh_from_db()
+    submission = first.submissions.get()
+    assert submission.submitted_at < project_run.deadline_at
+    decision_id = submission.review_decision.id
+    sprint_state = first.state
+
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT clock_timestamp()")
+        database_now = cursor.fetchone()[0]
+    sleep(max(0, (project_run.deadline_at - database_now).total_seconds()) + 0.05)
+
+    api_client.force_login(facilitator)
+    listed = api_client.get("/api/v1/project-runs/")
+    assert listed.status_code == 200
+    item = next(row for row in listed.data if row["id"] == str(project_run.id))
+    assert item["deadline_at"] is not None
+    assert item["can_mark_incomplete"] is True
+
+    url = f"/api/v1/project-runs/{project_run.id}/incomplete/"
+    marked = api_client.post(url, {}, format="json")
+    assert marked.status_code == 200
+    assert marked.data["state"] == ProjectRunState.INCOMPLETE
+    assert marked.data["ended_at"] is not None
+    assert api_client.post(url, {}, format="json").status_code == 409
+    assert not any(
+        row["id"] == str(project_run.id)
+        for row in api_client.get("/api/v1/project-runs/").data
+    )
+
+    first.refresh_from_db()
+    assert first.state == sprint_state
+    assert first.submissions.get().id == submission.id
+    assert first.submissions.get().review_decision.id == decision_id
+    historical = api_client.get(
+        f"/api/v1/project-runs/{project_run.id}/sprints/{first.id}/"
+    )
+    assert historical.status_code == 200
+    assert historical.data["submissions"][0]["id"] == str(submission.id)
+    assert historical.data["submissions"][0]["review_decision"]["id"] == str(decision_id)
+    with pytest.raises(SprintTransitionNotAllowed):
+        open_sprint(sprint_run_id=first.id, actor=facilitator)
+
+
+def test_staff_incomplete_api_rejects_early_nonstaff_inactive_and_unknown_run(
+    api_client,
+    runtime_project_run,
+    runtime_members,
+    facilitator,
+    django_user_model,
+):
+    url = f"/api/v1/project-runs/{runtime_project_run.id}/incomplete/"
+    api_client.force_login(facilitator)
+    listed = api_client.get("/api/v1/project-runs/")
+    item = next(row for row in listed.data if row["id"] == str(runtime_project_run.id))
+    assert parse_datetime(item["deadline_at"]) == runtime_project_run.deadline_at
+    assert item["can_mark_incomplete"] is False
+    assert api_client.post(url, {}, format="json").status_code == 409
+    assert api_client.post(f"/api/v1/project-runs/{uuid4()}/incomplete/", {}, format="json").status_code == 404
+
+    api_client.force_login(runtime_members["BACKEND_DEVELOPER"].user)
+    assert api_client.post(url, {}, format="json").status_code == 403
+    api_client.logout()
+    assert api_client.post(url, {}, format="json").status_code in {401, 403}
+
+    inactive_staff = django_user_model.objects.create_user(
+        email="inactive-incomplete-staff@example.test",
+        password="test-password-84731",
+        is_staff=True,
+        is_active=False,
+    )
+    api_client.force_login(inactive_staff)
+    assert api_client.post(url, {}, format="json").status_code in {401, 403}
+    runtime_project_run.refresh_from_db()
+    assert runtime_project_run.state == ProjectRunState.ACTIVE
+
+
+# Final-Sprint history must commit through the real lifecycle before this API attempt.
+@pytest.mark.django_db(transaction=True)
+def test_staff_incomplete_api_rejects_a_completed_run(
+    api_client,
+    runtime_project_run,
+    runtime_members,
+    facilitator,
+):
+    backend = runtime_members["BACKEND_DEVELOPER"]
+    transition_at = runtime_project_run.deadline_at - timedelta(days=2)
+    for sprint_run in _ordered_sprints(runtime_project_run):
+        _complete_sprint(
+            sprint_run=sprint_run,
+            member=backend,
+            facilitator=facilitator,
+            now=transition_at,
+        )
+    runtime_project_run.refresh_from_db()
+    assert runtime_project_run.state == ProjectRunState.COMPLETED
+
+    api_client.force_login(facilitator)
+    response = api_client.post(
+        f"/api/v1/project-runs/{runtime_project_run.id}/incomplete/",
+        {},
+        format="json",
+    )
+    assert response.status_code == 409
+    runtime_project_run.refresh_from_db()
+    assert runtime_project_run.state == ProjectRunState.COMPLETED
 
 
 def test_overdue_project_run_does_not_auto_transition(overdue_runtime_project_run):

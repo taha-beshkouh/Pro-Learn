@@ -1,9 +1,13 @@
 from enum import StrEnum
 
+from django.db.models import Q
+from django.utils import timezone
+
 from apps.formations.models import (
     ProjectReadiness,
     ProjectRunState,
     ReadyCheck,
+    ReadyCheckStatus,
     TeamMember,
 )
 
@@ -22,6 +26,9 @@ def current_unresolved_ready_checks():
     return ReadyCheck.objects.filter(
         is_current=True,
         formation__ready_confirmed_at__isnull=True,
+    ).filter(
+        Q(status=ReadyCheckStatus.CONFIRMED)
+        | Q(status=ReadyCheckStatus.PENDING, expires_at__gt=timezone.now())
     )
 
 

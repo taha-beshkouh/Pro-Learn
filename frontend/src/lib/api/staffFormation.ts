@@ -4,6 +4,7 @@ import { API_ENDPOINTS } from './endpoints'
 import type {
   ProjectListItem,
   ProjectReadinessResponse,
+  FormationReadyCheckResponse,
   StaffFormationProjectVersion,
   TeamFormationResponse,
 } from './types'
@@ -68,6 +69,24 @@ export function createTeamFormation(readinessIds: string[]) {
   )
 }
 
+export function loadTeamFormations(signal?: AbortSignal) {
+  return apiClient.get<TeamFormationResponse[]>(
+    API_ENDPOINTS.teamFormations.listCreate,
+    { signal },
+  )
+}
+
+export function replaceFormationReadyCheck(
+  formationId: string,
+  readyCheckId: string,
+  readinessId: string,
+) {
+  return apiClient.post<FormationReadyCheckResponse>(
+    API_ENDPOINTS.teamFormations.replaceReadyCheck(formationId, readyCheckId),
+    { readiness_id: readinessId },
+  )
+}
+
 export function staffFormationErrorMessage(error: unknown) {
   if (!(error instanceof ApiError)) {
     return error instanceof Error
@@ -93,6 +112,12 @@ export function staffFormationErrorMessage(error: unknown) {
   }
   if (payload.includes('readiness stack is not valid')) {
     return 'Stack یکی از آمادگی‌های انتخاب‌شده برای نقش پروژه معتبر نیست.'
+  }
+  if (payload.includes('same role') || payload.includes('required roles')) {
+    return 'داوطلب جایگزین باید نقش همین جایگاه را داشته باشد و شرایط مشارکت را برآورده کند.'
+  }
+  if (payload.includes('Only a declined or expired slot')) {
+    return 'فقط جایگاه ردشده یا منقضی‌شده قابل جایگزینی است. وضعیت تازه را بررسی کنید.'
   }
   if (payload.includes('current proposed formation')) {
     return 'یکی از کاربران انتخاب‌شده هم‌اکنون در یک Formation جاری قرار دارد.'

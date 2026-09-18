@@ -15,7 +15,6 @@ from apps.formations.services import (
     complete_sprint,
     mark_project_run_incomplete,
     mark_sprint_under_review,
-    request_sprint_changes,
 )
 
 
@@ -314,9 +313,9 @@ class SprintRunAdmin(ActionOnlyAdmin):
     )
     actions = (
         "mark_selected_under_review",
-        "request_changes_for_selected",
         "complete_selected_sprints",
     )
+    # Requesting changes requires per-Sprint feedback and is not a safe bulk action.
 
     @admin.display(ordering="sprint_template__sequence", description="Sprint")
     def sprint_sequence(self, obj):
@@ -339,21 +338,6 @@ class SprintRunAdmin(ActionOnlyAdmin):
             identifier_keyword="sprint_run_id",
             object_label="SprintRun",
             success_message="SprintRun(s) marked under review.",
-        )
-
-    @admin.action(
-        permissions=("change",),
-        description="Request changes for selected Sprints under review",
-    )
-    def request_changes_for_selected(self, request, queryset):
-        _run_service_action(
-            model_admin=self,
-            request=request,
-            queryset=queryset,
-            service=request_sprint_changes,
-            identifier_keyword="sprint_run_id",
-            object_label="SprintRun",
-            success_message="SprintRun(s) moved to changes requested.",
         )
 
     @admin.action(

@@ -114,7 +114,10 @@ const staffProjectRun: StaffProjectRunRepository = {
   team_id: 'team-runtime-api',
   state: 'ACTIVE',
   started_at: '2026-09-09T09:00:00Z',
+  deadline_at: '2026-10-21T09:00:00Z',
+  can_mark_incomplete: false,
   repository_url: null,
+  design_workspace_url: null,
   members: [
     {
       id: 'member-backend',
@@ -155,6 +158,7 @@ type ApiOptions = {
   formationGate?: Promise<void>
   nonStaff?: boolean
   repositoryFailure?: { status: number; data: unknown }
+  repositoryUrl?: string | null
 }
 
 function installApi({
@@ -162,6 +166,7 @@ function installApi({
   formationGate,
   nonStaff = false,
   repositoryFailure,
+  repositoryUrl = null,
 }: ApiOptions = {}) {
   const candidates = new Map(
     Object.entries(initialCandidates).map(([versionId, items]) => [
@@ -169,7 +174,7 @@ function installApi({
       [...items],
     ]),
   )
-  let repositoryRun = { ...staffProjectRun }
+  let repositoryRun = { ...staffProjectRun, repository_url: repositoryUrl }
   const api = vi.fn(
     async (input: RequestInfo | URL, request?: RequestInit) => {
       const url = new URL(String(input), 'http://frontend.test')
@@ -203,7 +208,7 @@ function installApi({
           return jsonResponse(repositoryFailure.data, repositoryFailure.status)
         }
         const body = JSON.parse(String(request.body)) as {
-          repository_url: string
+          repository_url: string | null
         }
         repositoryRun = { ...repositoryRun, repository_url: body.repository_url }
         return jsonResponse(repositoryRun)
@@ -338,9 +343,11 @@ describe('StaffFormationPage', () => {
       screen.getByLabelText('نشانی canonical مخزن پروژه'),
       'https://github.com/prolearn/api-project-alpha',
     )
-    await user.click(screen.getByRole('button', { name: 'ذخیره نشانی مخزن' }))
+    await user.click(screen.getByRole('button', { name: 'افزودن مخزن' }))
 
-    expect(await screen.findByText('نشانی مخزن ProjectRun ثبت شد.')).toBeInTheDocument()
+    expect(
+      await screen.findByText('نشانی canonical مخزن ProjectRun ذخیره شد.'),
+    ).toBeInTheDocument()
     const calls = callsFor(
       api,
       '/api/v1/project-runs/project-run-repository-api/repository/',
@@ -350,6 +357,89 @@ describe('StaffFormationPage', () => {
     expect(JSON.parse(String(calls[0]?.[1]?.body))).toEqual({
       repository_url: 'https://github.com/prolearn/api-project-alpha',
     })
+    expect(callsFor(api, '/api/v1/project-runs/', 'GET')).toHaveLength(2)
+    expect(
+      screen.getByRole('link', {
+        name: 'https://github.com/prolearn/api-project-alpha',
+      }),
+    ).toBeInTheDocument()
+  })
+
+  it('edits an existing repository and refreshes authoritative server state', async () => {
+    const user = userEvent.setup()
+    const api = installApi({
+      repositoryUrl: 'https://github.com/prolearn/original',
+    })
+    renderPage()
+
+    expect(
+      await screen.findByRole('link', {
+        name: 'https://github.com/prolearn/original',
+      }),
+    ).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'ویرایش نشانی' }))
+    const input = screen.getByLabelText('نشانی جدید مخزن canonical')
+    await user.clear(input)
+    await user.type(input, 'https://github.com/prolearn/replacement')
+    await user.click(screen.getByRole('button', { name: 'ذخیره تغییرات' }))
+
+    expect(
+      await screen.findByRole('link', {
+        name: 'https://github.com/prolearn/replacement',
+      }),
+    ).toBeInTheDocument()
+    const calls = callsFor(
+      api,
+      '/api/v1/project-runs/project-run-repository-api/repository/',
+      'PATCH',
+    )
+    expect(calls).toHaveLength(1)
+    expect(JSON.parse(String(calls[0]?.[1]?.body))).toEqual({
+      repository_url: 'https://github.com/prolearn/replacement',
+    })
+    expect(callsFor(api, '/api/v1/project-runs/', 'GET')).toHaveLength(2)
+  })
+
+  it('clears only the PROLEARN repository reference after explicit confirmation', async () => {
+    const user = userEvent.setup()
+    const api = installApi({
+      repositoryUrl: 'https://github.com/prolearn/to-clear',
+    })
+    renderPage()
+
+    await screen.findByRole('link', {
+      name: 'https://github.com/prolearn/to-clear',
+    })
+    await user.click(screen.getByRole('button', { name: 'حذف ارجاع مخزن' }))
+    expect(
+      screen.getByText(
+        'فقط ارجاع مخزن از PROLEARN حذف می‌شود. مخزن GitHub، دسترسی‌ها و اعضای آن حذف یا تغییر نمی‌کنند.',
+      ),
+    ).toBeInTheDocument()
+    expect(
+      callsFor(
+        api,
+        '/api/v1/project-runs/project-run-repository-api/repository/',
+        'PATCH',
+      ),
+    ).toHaveLength(0)
+
+    await user.click(screen.getByRole('button', { name: 'تأیید حذف ارجاع' }))
+
+    expect(
+      await screen.findByText('ارجاع مخزن از PROLEARN حذف شد.'),
+    ).toBeInTheDocument()
+    const calls = callsFor(
+      api,
+      '/api/v1/project-runs/project-run-repository-api/repository/',
+      'PATCH',
+    )
+    expect(calls).toHaveLength(1)
+    expect(JSON.parse(String(calls[0]?.[1]?.body))).toEqual({
+      repository_url: null,
+    })
+    expect(screen.getByRole('button', { name: 'افزودن مخزن' })).toBeInTheDocument()
+    expect(callsFor(api, '/api/v1/project-runs/', 'GET')).toHaveLength(2)
   })
 
   it('shows a clear conflict when the canonical repository belongs to another ProjectRun', async () => {
@@ -370,12 +460,14 @@ describe('StaffFormationPage', () => {
       await screen.findByLabelText('نشانی canonical مخزن پروژه'),
       'https://github.com/prolearn/already-used',
     )
-    await user.click(screen.getByRole('button', { name: 'ذخیره نشانی مخزن' }))
+    await user.click(screen.getByRole('button', { name: 'افزودن مخزن' }))
 
     expect(
       await screen.findByText('این مخزن قبلاً برای ProjectRun دیگری ثبت شده است.'),
     ).toBeInTheDocument()
-    expect(screen.queryByText('نشانی مخزن ProjectRun ثبت شد.')).not.toBeInTheDocument()
+    expect(
+      screen.queryByText('نشانی canonical مخزن ProjectRun ذخیره شد.'),
+    ).not.toBeInTheDocument()
   })
 
   it('loads authoritative active readiness data without profile images or ranking UI', async () => {

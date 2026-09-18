@@ -253,6 +253,67 @@
   line-height: 1.8;
 }
 
+.sprint-detail__submission-links {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-4) 0 0;
+}
+
+.sprint-detail__submission-links div {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.sprint-detail__submission-links dt {
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+}
+
+.sprint-detail__submission-links dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.sprint-detail__submission-links a {
+  color: #c8dcff;
+}
+
+.sprint-detail__review {
+  margin-top: var(--space-4);
+  padding: var(--space-4);
+  border-inline-start: 3px solid var(--sprint-accent);
+  background: var(--sprint-accent-soft);
+}
+
+.sprint-detail__review h4,
+.sprint-detail__review p {
+  margin: 0;
+}
+
+.sprint-detail__review p + p {
+  margin-top: var(--space-2);
+  white-space: pre-wrap;
+}
+
+.sprint-detail__current-feedback {
+  max-width: 52rem;
+  padding: var(--space-5);
+  border: 1px solid var(--sprint-accent-border);
+  border-radius: var(--radius-sm);
+  background: var(--sprint-accent-soft);
+}
+
+.sprint-detail__current-feedback h2,
+.sprint-detail__current-feedback p {
+  margin: 0;
+}
+
+.sprint-detail__current-feedback p {
+  margin-top: var(--space-3);
+  line-height: 1.8;
+  white-space: pre-wrap;
+}
+
 .sprint-detail__submission {
   max-width: 52rem;
   border-color: var(--sprint-accent-border);
@@ -274,9 +335,9 @@
   font-weight: 700;
 }
 
+.sprint-detail__submission input,
 .sprint-detail__submission textarea {
   width: 100%;
-  resize: vertical;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   color: var(--color-text);
@@ -285,8 +346,19 @@
   line-height: 1.7;
 }
 
+.sprint-detail__submission textarea {
+  resize: vertical;
+}
+
+.sprint-detail__submission input:focus,
 .sprint-detail__submission textarea:focus {
   border-color: var(--sprint-accent);
+}
+
+.sprint-detail__submission-context {
+  color: var(--color-text-muted);
+  line-height: 1.8;
+  overflow-wrap: anywhere;
 }
 
 .sprint-detail__submission .button {

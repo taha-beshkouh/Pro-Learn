@@ -54,6 +54,30 @@ class RepositoryAlreadyAssigned(FormationDomainError):
     pass
 
 
+class InvalidDesignWorkspaceUrl(FormationDomainError):
+    pass
+
+
+class DesignWorkspaceAccessDenied(FormationDomainError):
+    pass
+
+
+class ProjectRunRepositoryRequired(FormationDomainError):
+    pass
+
+
+class DesignWorkspaceRequired(FormationDomainError):
+    pass
+
+
+class InvalidFinalCommitUrl(FormationDomainError):
+    pass
+
+
+class InvalidDeploymentUrl(FormationDomainError):
+    pass
+
+
 class FormationAlreadyReady(FormationDomainError):
     pass
 
@@ -79,6 +103,10 @@ class SprintAccessDenied(FormationDomainError):
 
 
 class SprintSubmissionNotAllowed(FormationDomainError):
+    pass
+
+
+class InvalidReviewFeedback(FormationDomainError):
     pass
 
 

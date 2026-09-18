@@ -20,7 +20,7 @@ from apps.formations.models import (
     TeamFormation,
     TeamMember,
 )
-from apps.formations.services import submit_sprint
+from tests.formations.structured_submission import submit_structured_sprint as submit_sprint
 from apps.profiles.models import (
     ProfileLink,
     Role,
@@ -315,16 +315,6 @@ def test_sprint_admin_actions_use_the_validated_service_flow(
     sprint_run.refresh_from_db()
     assert sprint_run.state == SprintRunState.UNDER_REVIEW
 
-    sprint_admin.request_changes_for_selected(action_request(admin_user), queryset)
-    sprint_run.refresh_from_db()
-    assert sprint_run.state == SprintRunState.CHANGES_REQUESTED
-
-    submit_sprint(
-        sprint_run_id=sprint_run.id,
-        user=submitter.user,
-        evidence="Corrected review candidate",
-    )
-    sprint_admin.mark_selected_under_review(action_request(admin_user), queryset)
     sprint_admin.complete_selected_sprints(action_request(admin_user), queryset)
 
     sprint_run.refresh_from_db()
@@ -411,6 +401,5 @@ def test_unsafe_input_dependent_operations_are_not_bulk_admin_actions():
     assert not ready_check_actions
     assert set(sprint_actions) == {
         "mark_selected_under_review",
-        "request_changes_for_selected",
         "complete_selected_sprints",
     }

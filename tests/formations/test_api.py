@@ -80,6 +80,10 @@ def test_member_can_decline_own_ready_check(api_client, formation, designer_user
 
     assert response.status_code == 200
     assert response.data["status"] == ReadyCheckStatus.DECLINED
+    current = api_client.get("/api/v1/ready-checks/me/")
+    assert current.status_code == 200
+    assert current.data[0]["effective_status"] == ReadyCheckStatus.DECLINED
+    assert current.data[0]["is_current"] is True
 
 
 def test_third_confirmation_exposes_created_team_and_project_run_to_staff(
@@ -169,6 +173,13 @@ def test_only_staff_can_replace_and_replacement_keeps_role(
     assert response.status_code == 201
     assert response.data["role"]["code"] == "BACKEND_DEVELOPER"
     assert response.data["user"]["id"] == str(replacement_backend_user.id)
+    api_client.force_login(backend_user)
+    assert api_client.get("/api/v1/ready-checks/me/").data == []
+    api_client.force_login(replacement_backend_user)
+    replacement_checks = api_client.get("/api/v1/ready-checks/me/").data
+    assert len(replacement_checks) == 1
+    assert replacement_checks[0]["id"] == response.data["id"]
+    assert replacement_checks[0]["effective_status"] == ReadyCheckStatus.PENDING
 
 
 def test_invalid_stack_is_rejected_without_internal_details(

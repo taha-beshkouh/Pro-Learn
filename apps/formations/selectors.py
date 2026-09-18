@@ -1,4 +1,4 @@
-from django.db.models import Exists, F, OuterRef, Prefetch
+from django.db.models import Case, Exists, F, IntegerField, OuterRef, Prefetch, Value, When
 
 from apps.accounts.models import User
 from apps.formations.eligibility import (
@@ -91,6 +91,7 @@ def formation_detail(*, formation_id):
 
 
 def current_ready_checks_for_user(*, user: User):
+    active_ids = current_unresolved_ready_checks().filter(user=user).values("id")
     return (
         _ready_checks_queryset()
         .select_related(
@@ -99,6 +100,16 @@ def current_ready_checks_for_user(*, user: User):
             "formation__project_version__project_template",
         )
         .filter(user=user, is_current=True)
+        .annotate(
+            active_priority=Case(
+                When(id__in=active_ids, then=Value(0)),
+                default=Value(1),
+                output_field=IntegerField(),
+            )
+        )
+        # Keep a historical terminal response if there is no active invitation,
+        # but never let it mask a newer active Ready Check for this user.
+        .order_by("active_priority", "-started_at", "-id")[:1]
     )
 
 
@@ -129,6 +140,7 @@ def _sprint_runs_queryset():
         "submitted_by__user",
         "submitted_by__role",
         "submitted_by__technology_stack",
+        "review_decision",
     ).order_by("submitted_at", "id")
     return (
         SprintRun.objects.select_related(
@@ -193,6 +205,52 @@ def active_project_runs_for_staff():
             ended_at__isnull=True,
         )
         .order_by("-started_at", "id")
+    )
+
+
+def _staff_sprint_submissions_queryset():
+    return (
+        SprintSubmission.objects.select_related(
+            "submitted_by",
+            "submitted_by__user",
+            "submitted_by__role",
+            "submitted_by__technology_stack",
+            "review_decision",
+            "review_decision__reviewed_by",
+        )
+        # Full history is oldest-to-newest; the final item is authoritative latest.
+        .order_by("submitted_at", "id")
+    )
+
+
+def _staff_sprint_runs_queryset():
+    return (
+        SprintRun.objects.select_related("sprint_template")
+        .prefetch_related(
+            Prefetch(
+                "submissions",
+                queryset=_staff_sprint_submissions_queryset(),
+            )
+        )
+        .order_by("sprint_template__sequence", "id")
+    )
+
+
+def project_run_sprints_for_staff(*, project_run_id):
+    project_run = (
+        ProjectRun.objects.only("id")
+        .prefetch_related(
+            Prefetch("sprint_runs", queryset=_staff_sprint_runs_queryset())
+        )
+        .get(id=project_run_id)
+    )
+    return project_run.sprint_runs.all()
+
+
+def sprint_run_detail_for_staff(*, project_run_id, sprint_run_id) -> SprintRun:
+    return _staff_sprint_runs_queryset().get(
+        id=sprint_run_id,
+        project_run_id=project_run_id,
     )
 
 

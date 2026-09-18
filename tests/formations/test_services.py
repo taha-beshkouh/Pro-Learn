@@ -228,6 +228,11 @@ def test_active_project_run_users_cannot_enter_a_new_formation(
 
 def test_member_can_decline_only_pending_own_ready_check(formation):
     ready_check = formation.ready_checks.filter(is_current=True).first()
+    other_ids = list(
+        formation.ready_checks.exclude(id=ready_check.id)
+        .order_by("id")
+        .values_list("id", "status", "is_current")
+    )
 
     declined = decline_ready_check(
         ready_check_id=ready_check.id,
@@ -236,6 +241,14 @@ def test_member_can_decline_only_pending_own_ready_check(formation):
 
     assert declined.status == ReadyCheckStatus.DECLINED
     assert declined.responded_at is not None
+    assert formation.ready_confirmed_at is None
+    assert not Team.objects.filter(formation=formation).exists()
+    assert not ProjectRun.objects.filter(team__formation=formation).exists()
+    assert list(
+        formation.ready_checks.exclude(id=ready_check.id)
+        .order_by("id")
+        .values_list("id", "status", "is_current")
+    ) == other_ids
     with pytest.raises(ReadyCheckNotPending):
         decline_ready_check(ready_check_id=ready_check.id, user=ready_check.user)
 
@@ -243,6 +256,11 @@ def test_member_can_decline_only_pending_own_ready_check(formation):
 def test_expired_ready_check_cannot_confirm_and_expiration_is_persisted(formation):
     ready_check = formation.ready_checks.filter(is_current=True).first()
     now = ready_check.expires_at
+    other_ids = list(
+        formation.ready_checks.exclude(id=ready_check.id)
+        .order_by("id")
+        .values_list("id", "status", "is_current")
+    )
 
     with pytest.raises(ReadyCheckExpired):
         confirm_ready_check(
@@ -254,6 +272,12 @@ def test_expired_ready_check_cannot_confirm_and_expiration_is_persisted(formatio
     ready_check.refresh_from_db()
     assert ready_check.status == ReadyCheckStatus.EXPIRED
     assert ready_check.responded_at is None
+    assert not Team.objects.filter(formation=formation).exists()
+    assert list(
+        formation.ready_checks.exclude(id=ready_check.id)
+        .order_by("id")
+        .values_list("id", "status", "is_current")
+    ) == other_ids
 
 
 def test_replacement_preserves_role_and_other_members(
@@ -283,6 +307,7 @@ def test_replacement_preserves_role_and_other_members(
 
     backend.refresh_from_db()
     assert backend.is_current is False
+    assert backend.status == ReadyCheckStatus.DECLINED
     assert replacement.role_id == backend.role_id
     assert replacement.user == replacement_backend_user
     current_ids = set(
@@ -291,6 +316,55 @@ def test_replacement_preserves_role_and_other_members(
     assert len(current_ids) == 3
     assert current_ids & original_ids == original_ids - {backend.id}
     assert formation.ready_checks.count() == 4
+    assert not Team.objects.filter(formation=formation).exists()
+
+
+def test_replacement_confirmation_starts_one_run_without_the_declined_member(
+    formation,
+    backend_user,
+    replacement_backend_user,
+    django_stack,
+    facilitator,
+):
+    original = formation.ready_checks.get(user=backend_user, is_current=True)
+    for check in formation.ready_checks.exclude(id=original.id).order_by("id"):
+        confirm_ready_check(ready_check_id=check.id, user=check.user)
+    decline_ready_check(ready_check_id=original.id, user=backend_user)
+    assert not Team.objects.filter(formation=formation).exists()
+
+    readiness = ProjectReadiness.objects.create(
+        user=replacement_backend_user,
+        role=original.role,
+        project_version=formation.project_version,
+        technology_stack=django_stack,
+    )
+    replacement = replace_ready_check_member(
+        formation_id=formation.id,
+        ready_check_id=original.id,
+        replacement_readiness_id=readiness.id,
+        proposed_by=facilitator,
+    )
+    original.refresh_from_db()
+    assert original.status == ReadyCheckStatus.DECLINED
+    assert original.is_current is False
+    assert not Team.objects.filter(formation=formation).exists()
+
+    confirm_ready_check(ready_check_id=replacement.id, user=replacement_backend_user)
+    formation.refresh_from_db()
+    run = ProjectRun.objects.get(team__formation=formation)
+    assert formation.ready_confirmed_at is not None
+    assert Team.objects.filter(formation=formation).count() == 1
+    assert ProjectRun.objects.filter(team__formation=formation).count() == 1
+    current_user_ids = set(
+        formation.ready_checks.filter(is_current=True).values_list(
+            "user_id", flat=True
+        )
+    )
+    assert set(run.members.values_list("user_id", flat=True)) == current_user_ids
+    assert not run.members.filter(user=backend_user).exists()
+    with pytest.raises(ReadyCheckNotPending):
+        confirm_ready_check(ready_check_id=replacement.id, user=replacement_backend_user)
+    assert ProjectRun.objects.filter(team__formation=formation).count() == 1
 
 
 def test_pending_unexpired_member_cannot_be_replaced(
@@ -352,13 +426,74 @@ def test_declined_member_cannot_replace_themselves(
         technology_stack=django_stack,
     )
 
-    with pytest.raises(MemberHasUnresolvedFormation):
+    with pytest.raises(InvalidFormationMembers):
         replace_ready_check_member(
             formation_id=formation.id,
             ready_check_id=backend.id,
             replacement_readiness_id=readiness.id,
             proposed_by=facilitator,
         )
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.postgresql
+def test_decline_and_staff_replacement_serialize_on_the_formation(
+    formation,
+    backend_user,
+    replacement_backend_user,
+    django_stack,
+    facilitator,
+):
+    original = formation.ready_checks.get(user=backend_user, is_current=True)
+    readiness = ProjectReadiness.objects.create(
+        user=replacement_backend_user,
+        role=original.role,
+        project_version=formation.project_version,
+        technology_stack=django_stack,
+    )
+    barrier = Barrier(2)
+
+    def decline():
+        close_old_connections()
+        try:
+            actor = type(backend_user).objects.get(id=backend_user.id)
+            barrier.wait(timeout=5)
+            decline_ready_check(ready_check_id=original.id, user=actor)
+            return "declined"
+        finally:
+            close_old_connections()
+
+    def replace():
+        close_old_connections()
+        try:
+            actor = type(facilitator).objects.get(id=facilitator.id)
+            barrier.wait(timeout=5)
+            try:
+                replace_ready_check_member(
+                    formation_id=formation.id,
+                    ready_check_id=original.id,
+                    replacement_readiness_id=readiness.id,
+                    proposed_by=actor,
+                )
+            except ReadyCheckNotReplaceable:
+                return "not-yet-declined"
+            return "replaced"
+        finally:
+            close_old_connections()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        decline_result = executor.submit(decline)
+        replace_result = executor.submit(replace)
+        assert decline_result.result() == "declined"
+        outcome = replace_result.result()
+
+    assert outcome in {"replaced", "not-yet-declined"}
+    original.refresh_from_db()
+    assert original.status == ReadyCheckStatus.DECLINED
+    assert formation.ready_checks.filter(is_current=True).count() == 3
+    assert formation.ready_checks.filter(is_current=True, role=original.role).count() == 1
+    assert original.is_current is (outcome == "not-yet-declined")
+    assert not Team.objects.filter(formation=formation).exists()
 
 
 @pytest.mark.django_db(transaction=True)

@@ -92,6 +92,10 @@ function assertWorkspaceContract(value: unknown): asserts value is ProjectRunWor
     !hasString(value, 'state') ||
     !hasString(value, 'deadline_at') ||
     !(value.repository_url === null || typeof value.repository_url === 'string') ||
+    !(
+      value.design_workspace_url === null ||
+      typeof value.design_workspace_url === 'string'
+    ) ||
     !isRecord(project) ||
     !hasString(project, 'id') ||
     !hasString(project, 'name') ||

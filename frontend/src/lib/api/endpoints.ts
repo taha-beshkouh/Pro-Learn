@@ -39,6 +39,8 @@ export const API_ENDPOINTS = {
   },
   teamFormations: {
     listCreate: '/team-formations/',
+    replaceReadyCheck: (formationId: string, readyCheckId: string) =>
+      `/team-formations/${segment(formationId)}/ready-checks/${segment(readyCheckId)}/replace/`,
   },
   readyChecks: {
     mine: '/ready-checks/me/',
@@ -49,8 +51,12 @@ export const API_ENDPOINTS = {
   },
   projectRuns: {
     staffList: '/project-runs/',
+    markIncomplete: (projectRunId: string) =>
+      `/project-runs/${segment(projectRunId)}/incomplete/`,
     repository: (projectRunId: string) =>
       `/project-runs/${segment(projectRunId)}/repository/`,
+    designWorkspace: (projectRunId: string) =>
+      `/project-runs/${segment(projectRunId)}/design-workspace/`,
     dashboard: '/project-runs/me/dashboard/',
     workspace: '/project-runs/me/workspace/',
     sprints: '/project-runs/me/sprints/',
@@ -58,5 +64,17 @@ export const API_ENDPOINTS = {
       `/project-runs/me/sprints/${segment(sprintRunId)}/`,
     submitSprint: (projectRunId: string, sprintRunId: string) =>
       `/project-runs/${segment(projectRunId)}/sprints/${segment(sprintRunId)}/submit/`,
+    staffSprints: (projectRunId: string) =>
+      `/project-runs/${segment(projectRunId)}/sprints/`,
+    staffSprint: (projectRunId: string, sprintRunId: string) =>
+      `/project-runs/${segment(projectRunId)}/sprints/${segment(sprintRunId)}/`,
+    openSprint: (projectRunId: string, sprintRunId: string) =>
+      `/project-runs/${segment(projectRunId)}/sprints/${segment(sprintRunId)}/open/`,
+    startSprintReview: (projectRunId: string, sprintRunId: string) =>
+      `/project-runs/${segment(projectRunId)}/sprints/${segment(sprintRunId)}/under-review/`,
+    requestSprintChanges: (projectRunId: string, sprintRunId: string) =>
+      `/project-runs/${segment(projectRunId)}/sprints/${segment(sprintRunId)}/request-changes/`,
+    completeSprint: (projectRunId: string, sprintRunId: string) =>
+      `/project-runs/${segment(projectRunId)}/sprints/${segment(sprintRunId)}/complete/`,
   },
 } as const

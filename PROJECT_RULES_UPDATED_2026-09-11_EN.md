@@ -271,7 +271,9 @@ Rules:
 Repository:
 - After full Ready Check succeeds and Team + ProjectRun exist, Staff manually creates one private repository in the PROLEARN GitHub Organization for that ProjectRun.
 - Repo creation and collaborator access are manual in MVP.
-- The ProjectRun has one canonical repository URL managed by Staff.
+- The ProjectRun has one canonical GitHub repository root URL managed by Staff.
+- One canonical repository may belong to only one ProjectRun; repository reuse across different ProjectRuns is not allowed.
+- Staff may register, correct, replace, or clear the PROLEARN repository reference. Clearing the reference does not delete the GitHub repository, revoke access, remove collaborators, or perform any GitHub-side operation.
 - Team members may use normal Git workflows: clone, branch, commit, push, pull request, merge.
 - PROLEARN does not care how many commits are created.
 - Sprint delivery identifies the exact final commit/revision being submitted.
