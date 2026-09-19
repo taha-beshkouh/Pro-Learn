@@ -6,6 +6,26 @@
 
 ## Current Workstream
 
+### Deployment Phase 3 — Production Security and Environment Configuration
+Status: `IMPLEMENTED - DATABASE-FREE VALIDATION PASSED - RUNFLARE HOST/PROXY/DATABASE VALIDATION PENDING`
+
+Current position:
+- `DJANGO_DEBUG=false` is the explicit production-mode signal. Boolean environment values are parsed strictly; malformed values fail startup instead of silently becoming truthy or falsey, while local development retains `DEBUG=True` defaults.
+- production startup requires a nonblank `DJANGO_SECRET_KEY`, explicit non-wildcard `DJANGO_ALLOWED_HOSTS`, and all five PostgreSQL connection values; missing or blank required values fail fast without connecting to a database.
+- `DJANGO_CSRF_TRUSTED_ORIGINS` is optional for the same-origin topology, accepts normalized comma-separated full origins, and requires HTTPS origins in production. Session and CSRF cookies are secure in production and cannot be explicitly disabled there; existing SameSite/session/CSRF authentication behavior is unchanged.
+- forwarded-protocol trust and Django HTTPS redirects are separate opt-in settings. Redirects require confirmed forwarded-protocol trust to avoid the supported reverse-proxy deployment entering a redirect loop; `USE_X_FORWARDED_HOST` remains disabled.
+- HSTS remains intentionally disabled (`SECURE_HSTS_SECONDS=0`, no subdomains/preload) until the real public host, HTTPS termination, and proxy headers are validated. No Runflare hostname, origin, custom domain, or proxy behavior is hardcoded.
+- production PostgreSQL remains environment-configured with no SQLite fallback. Database SSL behavior is unchanged and awaits the actual Runflare database contract; no database connection, migration, schema, trigger, or constraint change was made.
+- the root `.env.example` documents the production runtime contract. The frontend example now reflects the existing browser-visible, same-origin `/api/v1` default; no absolute production API URL or frontend secret was introduced.
+
+Validation state:
+- focused production settings and existing Phase 2 production-serving tests pass together (`51 passed`), covering production fail-fast behavior, strict parsing, secure cookies, proxy controls, PostgreSQL value parsing, SPA/static serving, API/Admin ownership, and CSRF enforcement,
+- Django `check` and `makemigrations --check --dry-run` pass with database-free settings; `check --deploy` with safe production placeholders reports only the intentionally deferred HSTS warning,
+- all 203 frontend tests, typecheck, lint, and the Vite production build pass; same-origin API behavior remains unchanged,
+- real PostgreSQL and Runflare were not accessed. Final public hostname/origin values, forwarded-proto behavior, HTTPS redirect enablement, HSTS rollout, and any provider-required database SSL mode remain manual deployment validation boundaries.
+
+---
+
 ### Deployment Phase 2 — Production Process and Combined Django/React Serving
 Status: `IMPLEMENTED - LOCAL STATIC/FRONTEND VALIDATION PASSED - LINUX/PROVIDER VALIDATION PENDING`
 
