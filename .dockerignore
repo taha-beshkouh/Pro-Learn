@@ -1,0 +1,47 @@
+# Version control and editor metadata
+.git
+.gitignore
+.github
+.idea
+.vscode
+.agents
+.codex
+
+# Secrets and local environment files
+.env
+.env.*
+frontend/.env
+frontend/.env.*
+
+# Local Python environments and caches
+.venv
+venv
+__pycache__
+**/__pycache__
+*.py[cod]
+*.egg-info
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov
+
+# Frontend dependencies and generated output are built inside Docker
+frontend/node_modules
+frontend/dist
+frontend/dist-ssr
+
+# Django/runtime-generated local output
+staticfiles
+media
+*.log
+*.sqlite3
+db.sqlite3
+
+# Test and local tool artifacts are not required in the runtime build
+tests
+.uv-cache
+
+# Operating-system artifacts
+.DS_Store
+Thumbs.db

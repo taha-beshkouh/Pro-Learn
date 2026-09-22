@@ -6,6 +6,30 @@
 
 ## Current Workstream
 
+### Runflare Docker Deployment
+Status: `IMPLEMENTED - LOCAL DOCKER RUNTIME VALIDATED - RUNFLARE VALIDATION PENDING`
+
+Current position:
+- Runflare's managed Django runtime is no longer the deployment target because it did not install the canonical `pyproject.toml`/`uv.lock` dependency graph and does not provide Node/npm to produce the required Vite build.
+- the production `Dockerfile` uses separate Node 24 frontend, Python 3.13 dependency/static-build, and Python 3.13 runtime stages. The frontend stage uses the committed npm lock through `npm ci` and produces the existing `frontend/dist` contract.
+- the Python stage installs uv `0.11.24` and runs `uv sync --locked --no-dev --no-install-project`; the incomplete `requirements.txt` is not used. The final image contains the resulting production virtual environment but not uv, Node, npm, `node_modules`, or build caches.
+- `collectstatic` runs during image construction with `config.settings_static`, whose dummy database backend prevents PostgreSQL access. The generated `staticfiles` and Vite `frontend/dist` directories are copied into the final image for the existing WhiteNoise configuration.
+- the final container runs as the non-root `prolearn` user and starts the existing synchronous WSGI application with Gunicorn `26.2.0` using `gunicorn config.wsgi:application --bind 0.0.0.0:8000 --access-logfile - --error-logfile - --no-control-socket`; `WEB_CONCURRENCY` defaults to `3` and remains runtime-overridable.
+- production secrets, host/origin values, and PostgreSQL connection values remain Runflare runtime environment configuration. Frontend same-origin `/api/v1` remains the build default, so no frontend build argument or browser-visible secret is required.
+- image build and startup do not install packages, build frontend assets, run migrations, connect to PostgreSQL, or hide configuration failures. Database migration planning and execution remain explicit developer-controlled Runflare operations.
+- `.dockerignore` excludes Git metadata, real/local environment files, virtual environments, caches, local dependency/build output, IDE data, local databases, and test artifacts from the Docker build context.
+
+Validation state:
+- the developer reported successful locked `npm ci`; frontend production build, all 203 frontend tests, typecheck, and lint pass,
+- uv accepts the exact production sync command with `--locked --no-dev --no-install-project` in dry-run mode; focused Docker contract tests pass (`4 passed`) and production settings/serving tests pass (`51 passed`),
+- Django database-free `check`, `makemigrations --check --dry-run`, and `collectstatic` pass; production `check --deploy` reports only the intentionally deferred HSTS warning when the validated proxy/redirect placeholders are enabled,
+- the Docker image builds successfully and the final image contains `frontend/dist/index.html` and the collected Django static files,
+- the container starts successfully as the non-root `prolearn` user; Gunicorn `26.2.0` boots with `--no-control-socket`, resolving the `/app/.gunicorn` permission error, remains running, binds to `0.0.0.0:8000`, and serves HTTP `/` successfully,
+- Runflare deployment, public-host/proxy behavior, and production PostgreSQL validation remain pending,
+- no database connection, migration execution, model/schema change, or application business/authentication behavior change occurred.
+
+---
+
 ### Deployment Phase 3 — Production Security and Environment Configuration
 Status: `IMPLEMENTED - DATABASE-FREE VALIDATION PASSED - RUNFLARE HOST/PROXY/DATABASE VALIDATION PENDING`
 
@@ -27,20 +51,20 @@ Validation state:
 ---
 
 ### Deployment Phase 2 — Production Process and Combined Django/React Serving
-Status: `IMPLEMENTED - LOCAL STATIC/FRONTEND VALIDATION PASSED - LINUX/PROVIDER VALIDATION PENDING`
+Status: `IMPLEMENTED - LOCAL DOCKER RUNTIME VALIDATED - PROVIDER VALIDATION PENDING`
 
 Current position:
-- Gunicorn is the production WSGI server for the synchronous Django application; the provider-independent Linux start command is `gunicorn config.wsgi:application` (bind address, port, and worker count remain deployment settings).
+- Gunicorn is the production WSGI server for the synchronous Django application; the Docker runtime uses Gunicorn `26.2.0` with `config.wsgi:application`, binds to `0.0.0.0:8000`, logs to stdout/stderr, and disables the unused control socket with `--no-control-socket`.
 - Vite builds the React frontend to ignored `frontend/dist`. Django serves that generated `index.html` for the root and frontend routes; WhiteNoise serves its hashed `/assets/*` files and current root public files (`favicon.svg`, `icons.svg`) from the same build directory.
 - `STATIC_ROOT` is `staticfiles`; `collectstatic` prepares Django/Admin files for WhiteNoise at `/static/*`. The SPA fallback excludes `/api/*`, `/admin/*`, `/static/*`, `/assets/*`, and the root public filenames, so missing backend/static resources do not return SPA HTML.
 - Same-origin `/api/v1`, session cookies, CSRF, and frontend credentials behavior remain unchanged. The Vite development server and its API proxy remain available without a production build for normal frontend development.
 - Provider-independent build sequence: `uv sync --locked`, `npm ci` in `frontend/`, `npm run build` in `frontend/`, then `python manage.py collectstatic --noinput`; start Gunicorn after build artifacts are present. Database migrations are not part of this application build.
-- No production hostname, proxy/HTTPS security values, provider configuration, or PostgreSQL setup was added. Gunicorn process execution on Linux and PostgreSQL-backed regression tests remain manual deployment/developer validation boundaries.
+- No production hostname, proxy/HTTPS security values, provider configuration, or PostgreSQL setup was added. Local Linux-container Gunicorn execution is validated; Runflare execution and PostgreSQL-backed regression tests remain manual deployment/developer validation boundaries.
 
 Validation state:
 - `uv lock` reconciled the new Gunicorn/WhiteNoise dependencies; the developer reported successful `uv sync --locked --extra test` and lock resolution.
 - `npm ci`, all 203 frontend tests, typecheck, lint, and Vite production build pass. Focused production serving/static tests pass (18), including current built-asset references; 572 backend tests collect and a 41-test database-free subset passes.
-- `manage.py check` and `makemigrations --check --dry-run` pass using `config.settings_static`; WSGI application import passes. No real PostgreSQL connection, migration, or schema change was made.
+- `manage.py check` and `makemigrations --check --dry-run` pass using `config.settings_static`; WSGI application import passes. The local Docker image builds, starts as non-root, contains the Vite and Django static artifacts, keeps Gunicorn running on `0.0.0.0:8000`, and serves HTTP `/`. No real PostgreSQL connection, migration, or schema change was made.
 
 ---
 
